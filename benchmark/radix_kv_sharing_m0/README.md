@@ -154,6 +154,12 @@ measurement floor in both execution orders. A confirmation result does not imply
 optimal-K shift. M1 remains blocked until a semantically coherent shared-prefix
 workload produces non-zero draft acceptance while retaining the paired controls.
 
+The 2026-08-13 H100 NVL run confirmed all eight `BS × context × K` cells across both
+restart orders and all three seeds. The counterbalanced shared-layout speedup ranged
+from 12.55% to 27.61%. This closes M0, but not M1: the K=4 captures contained only 20
+non-zero correct-draft decisions among 73,708 request decisions. See
+`M0_CONFIRMATION_20260813.md` for the complete result and interpretation boundary.
+
 ## Screen runner
 
 `run_screen.sh` automates the twelve required server configurations, retains server
