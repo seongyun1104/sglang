@@ -14,6 +14,7 @@ python3 -m sglang.benchmark.one_batch_server --model None --base-url http://loca
 
 import argparse
 import dataclasses
+import hashlib
 import itertools
 import json
 import random
@@ -378,6 +379,8 @@ class BenchOneCaseResult(BaseModel):
     acc_length: float
     cache_hit_rate: Optional[float] = None
     profile_link: Optional[str] = None
+    input_fingerprints: Optional[List[str]] = None
+    seed: Optional[int] = None
 
     def dump_to_jsonl(self, result_filename: str):
         with open(result_filename, "a") as fout:
@@ -398,8 +401,22 @@ class BenchOneCaseResult(BaseModel):
                     if self.cache_hit_rate is not None
                     else None
                 ),
+                "input_fingerprints": self.input_fingerprints,
+                "seed": self.seed,
             }
             fout.write(json.dumps(res) + "\n")
+
+
+def _fingerprint_input_ids(input_ids: List[List[int]]) -> List[str]:
+    """Return stable per-request fingerprints without storing prompt tokens."""
+    fingerprints = []
+    for request_ids in input_ids:
+        digest = hashlib.sha256()
+        digest.update(len(request_ids).to_bytes(8, "little", signed=False))
+        for token_id in request_ids:
+            digest.update(int(token_id).to_bytes(8, "little", signed=True))
+        fingerprints.append(digest.hexdigest())
+    return fingerprints
 
 
 def _warmup_cache(
@@ -559,6 +576,7 @@ def run_one_case(
     lora_zipf_alpha: float = BenchArgs.lora_zipf_alpha,
     fixed_prompt_file: str = "",
     apply_chat_template: bool = False,
+    seed: int = BenchArgs.seed,
 ):
     if backend == "vllm":
         # You need to have export VLLM_SERVER_DEV_MODE=1 in your environment to use this endpoint.
@@ -592,7 +610,7 @@ def run_one_case(
             dataset_path=dataset_path,
             tokenize_prompt=dataset_name not in ("mmmu", "generated-shared-prefix"),
             backend=backend,
-            seed=BenchArgs.seed,
+            seed=seed,
             gsp_num_groups=actual_gsp_groups,
             gsp_prompts_per_group=(batch_size + actual_gsp_groups - 1)
             // actual_gsp_groups,
@@ -829,6 +847,8 @@ def run_one_case(
         acc_length=acc_length,
         cache_hit_rate=metrics_cache_hit_rate,
         profile_link=profile_link,
+        input_fingerprints=_fingerprint_input_ids(input_ids),
+        seed=seed,
     )
 
     # Save and return the results
@@ -1096,6 +1116,7 @@ def run_benchmark_internal(
                 lora_zipf_alpha=bench_args.lora_zipf_alpha,
                 fixed_prompt_file=bench_args.fixed_prompt_file,
                 apply_chat_template=bench_args.apply_chat_template,
+                seed=bench_args.seed,
                 **gsp_kwargs,
             )
         print("=" * 8 + " Warmup End   " + "=" * 8 + "\n")
@@ -1141,6 +1162,7 @@ def run_benchmark_internal(
                     lora_zipf_alpha=bench_args.lora_zipf_alpha,
                     fixed_prompt_file=bench_args.fixed_prompt_file,
                     apply_chat_template=bench_args.apply_chat_template,
+                    seed=bench_args.seed,
                     **gsp_kwargs,
                 )
             )
@@ -1195,6 +1217,7 @@ def run_benchmark_internal(
                             lora_name=bench_args.lora_name,
                             lora_request_distribution=bench_args.lora_request_distribution,
                             lora_zipf_alpha=bench_args.lora_zipf_alpha,
+                            seed=bench_args.seed,
                             **gsp_kwargs,
                         )
                     )

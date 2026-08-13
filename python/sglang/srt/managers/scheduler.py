@@ -3838,6 +3838,11 @@ class Scheduler(
 
             if self.draft_worker:
                 self.draft_worker.clear_cache_pool()
+                clear_radix_m0 = getattr(
+                    self.draft_worker, "clear_radix_kv_m0_records", None
+                )
+                if clear_radix_m0 is not None:
+                    clear_radix_m0()
 
             if empty_cache:
                 current_platform.empty_cache()
@@ -3893,6 +3898,15 @@ class Scheduler(
             info_record = self.draft_worker.dump_info_records()
             if info_record is not None:
                 ret["dspark_info_record"] = info_record
+
+        if self.draft_worker is not None:
+            dump_radix_m0 = getattr(
+                self.draft_worker, "dump_radix_kv_m0_records", None
+            )
+            if dump_radix_m0 is not None:
+                radix_m0_record = dump_radix_m0()
+                if radix_m0_record is not None:
+                    ret["radix_kv_m0_record"] = radix_m0_record
 
         # These fields are not msgpack-serializable (a config object and a bound
         # signal handler); no reader consumes them.

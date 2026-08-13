@@ -75,6 +75,7 @@ from sglang.srt.speculative.eagle_worker_common import (
     prepare_for_draft_extend,
     run_eagle_verify,
 )
+from sglang.srt.speculative.radix_kv_m0_observability import RadixKVM0Recorder
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.spec_utils import (
     draft_tp_context,
@@ -1070,6 +1071,13 @@ class EAGLEWorkerV2(BaseSpecWorker):
         self.extend_lens = torch.empty((), dtype=torch.int64, device=self.device)
 
         self.plan_stream, self.plan_stream_ctx = get_plan_stream(self.device)
+        self.radix_kv_m0_recorder = RadixKVM0Recorder(
+            components=envs.SGLANG_RADIX_KV_M0_RECORD.get(),
+            device=self.device,
+            page_size=self.page_size,
+            radix_cache_enabled=not server_args.disable_radix_cache,
+            gpu_id=self.gpu_id,
+        )
 
     @property
     def war_fastpath_runner(self):
@@ -1197,7 +1205,15 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     verify_input: EagleVerifyInput = self.draft_worker.draft(batch)
             assert verify_input.is_verify_input()
             batch.spec_info = verify_input
-            batch_output = self.verify(batch)
+            with (
+                self.radix_kv_m0_recorder.target_verify(
+                    batch=batch,
+                    req_to_token_pool=self.req_to_token_pool,
+                    speculative_num_steps=self.speculative_num_steps,
+                ),
+                spec_stage_span("target_verify"),
+            ):
+                batch_output = self.verify(batch)
             # Publish before draft_extend so the fence is at verify-end.
             if on_publish is not None:
                 on_publish(batch_output.new_seq_lens)
@@ -1312,12 +1328,24 @@ class EAGLEWorkerV2(BaseSpecWorker):
         batch_size: int = 0,
         ctx_repr: int = 0,
     ) -> None:
+        recorder = getattr(self, "radix_kv_m0_recorder", None)
+        if recorder is not None:
+            recorder.observe_acceptance(num_correct_drafts_per_req)
         if self.adaptive_controller is not None:
             self.adaptive_controller.on_verify_complete(
                 num_correct_drafts_per_req,
                 batch_size=batch_size,
                 ctx_repr=ctx_repr,
             )
+
+    def dump_radix_kv_m0_records(self):
+        recorder = getattr(self, "radix_kv_m0_recorder", None)
+        return None if recorder is None or not recorder.enabled else recorder.dump()
+
+    def clear_radix_kv_m0_records(self) -> None:
+        recorder = getattr(self, "radix_kv_m0_recorder", None)
+        if recorder is not None:
+            recorder.clear()
 
     def activate_step_by_batch(self, batch_size: int, ctx_repr: int = 0) -> None:
         if self.adaptive_controller is not None:
