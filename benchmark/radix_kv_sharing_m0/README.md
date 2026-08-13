@@ -115,7 +115,9 @@ The analyzer suppresses speedup values unless all of the following hold:
 2. the number of measured verify records matches within each pass;
 3. every per-step acceptance vector matches between physical layouts;
 4. every per-step logical-context vector matches between physical layouts;
-5. the runtime batch size equals the preregistered batch size;
+5. every retained runtime batch equals the preregistered batch size; paired tail
+   records where both layouts underfill identically after an early EOS are excluded
+   and counted, while asymmetric underfill invalidates the cell;
 6. measured physical page reuse is higher in the shared layout.
 
 `unique_physical_pages` and `page_reuse_ratio` are accounting quantities, not HBM

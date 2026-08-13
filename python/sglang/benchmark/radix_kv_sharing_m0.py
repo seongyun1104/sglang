@@ -321,11 +321,11 @@ def analyze_capture_pairs(
         assert shared_capture is not None and duplicated_capture is not None
         shared_records = shared_capture["recorder"]["records"][discard_first:]
         duplicated_records = duplicated_capture["recorder"]["records"][discard_first:]
-        pair_count = min(len(shared_records), len(duplicated_records))
+        raw_pair_count = min(len(shared_records), len(duplicated_records))
         timing_speedups: list[float] = []
         acceptance_matches = 0
         context_matches = 0
-        runtime_batch_matches = 0
+        timing_underfilled_pairs_excluded = 0
         invalid_reasons: list[str] = []
         if any(
             "kv_footprint" not in captures_by_component
@@ -374,9 +374,23 @@ def analyze_capture_pairs(
             invalid_reasons.append("server_provenance_mismatch")
         if len(shared_records) != len(duplicated_records):
             invalid_reasons.append("timing_record_count_mismatch")
+        timing_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for shared, duplicated in zip(
-            shared_records[:pair_count], duplicated_records[:pair_count], strict=True
+            shared_records[:raw_pair_count],
+            duplicated_records[:raw_pair_count],
+            strict=True,
         ):
+            shared_full = int(shared.get("batch_size", -1)) == batch_size
+            duplicated_full = int(duplicated.get("batch_size", -1)) == batch_size
+            if shared_full != duplicated_full:
+                invalid_reasons.append("asymmetric_runtime_batch_size")
+                continue
+            if not shared_full:
+                timing_underfilled_pairs_excluded += 1
+                continue
+            timing_pairs.append((shared, duplicated))
+        pair_count = len(timing_pairs)
+        for shared, duplicated in timing_pairs:
             if shared.get("correct_drafts_per_req") == duplicated.get(
                 "correct_drafts_per_req"
             ):
@@ -385,11 +399,6 @@ def analyze_capture_pairs(
                 "logical_context_lengths"
             ):
                 context_matches += 1
-            if (
-                int(shared.get("batch_size", -1)) == batch_size
-                and int(duplicated.get("batch_size", -1)) == batch_size
-            ):
-                runtime_batch_matches += 1
             if (
                 "target_verify_gpu_ms" in shared
                 and "target_verify_gpu_ms" in duplicated
@@ -405,18 +414,13 @@ def analyze_capture_pairs(
             invalid_reasons.append("acceptance_trajectory_mismatch")
         if context_matches != pair_count:
             invalid_reasons.append("logical_context_trajectory_mismatch")
-        if runtime_batch_matches != pair_count:
-            invalid_reasons.append("runtime_batch_size_mismatch")
         footprint_arms = {
             layout: captures_by_component.get("kv_footprint")
             for layout, captures_by_component in arms.items()
         }
-        shared_page_reuse = _footprint_values(
-            footprint_arms["shared"], discard_first=footprint_discard_first
-        )
-        duplicated_page_reuse = _footprint_values(
-            footprint_arms["duplicated"], discard_first=footprint_discard_first
-        )
+        shared_page_reuse: list[float] = []
+        duplicated_page_reuse: list[float] = []
+        footprint_underfilled_pairs_excluded = 0
         if all(capture is not None for capture in footprint_arms.values()):
             shared_footprint = footprint_arms["shared"]
             duplicated_footprint = footprint_arms["duplicated"]
@@ -429,28 +433,45 @@ def analyze_capture_pairs(
             ]
             if len(shared_footprint_records) != len(duplicated_footprint_records):
                 invalid_reasons.append("footprint_record_count_mismatch")
+            footprint_pair_count = min(
+                len(shared_footprint_records), len(duplicated_footprint_records)
+            )
+            footprint_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            for shared, duplicated in zip(
+                shared_footprint_records[:footprint_pair_count],
+                duplicated_footprint_records[:footprint_pair_count],
+                strict=True,
+            ):
+                shared_full = int(shared.get("batch_size", -1)) == batch_size
+                duplicated_full = int(duplicated.get("batch_size", -1)) == batch_size
+                if shared_full != duplicated_full:
+                    invalid_reasons.append("asymmetric_footprint_runtime_batch_size")
+                    continue
+                if not shared_full:
+                    footprint_underfilled_pairs_excluded += 1
+                    continue
+                footprint_pairs.append((shared, duplicated))
             if [
-                record.get("correct_drafts_per_req")
-                for record in shared_footprint_records
+                shared.get("correct_drafts_per_req") for shared, _ in footprint_pairs
             ] != [
-                record.get("correct_drafts_per_req")
-                for record in duplicated_footprint_records
+                duplicated.get("correct_drafts_per_req")
+                for _, duplicated in footprint_pairs
             ]:
                 invalid_reasons.append("footprint_acceptance_trajectory_mismatch")
             if [
-                record.get("logical_context_lengths")
-                for record in shared_footprint_records
+                shared.get("logical_context_lengths") for shared, _ in footprint_pairs
             ] != [
-                record.get("logical_context_lengths")
-                for record in duplicated_footprint_records
+                duplicated.get("logical_context_lengths")
+                for _, duplicated in footprint_pairs
             ]:
                 invalid_reasons.append("footprint_context_trajectory_mismatch")
-            if any(
-                int(record.get("batch_size", -1)) != batch_size
-                for records in (shared_footprint_records, duplicated_footprint_records)
-                for record in records
-            ):
-                invalid_reasons.append("footprint_runtime_batch_size_mismatch")
+            shared_page_reuse = [
+                float(shared["page_reuse_ratio"]) for shared, _ in footprint_pairs
+            ]
+            duplicated_page_reuse = [
+                float(duplicated["page_reuse_ratio"])
+                for _, duplicated in footprint_pairs
+            ]
         if shared_page_reuse and duplicated_page_reuse:
             if statistics.median(shared_page_reuse) <= statistics.median(
                 duplicated_page_reuse
@@ -467,6 +488,10 @@ def analyze_capture_pairs(
                 "speculative_num_steps": steps,
                 "seed": seed,
                 "paired_records": pair_count,
+                "timing_underfilled_pairs_excluded": timing_underfilled_pairs_excluded,
+                "footprint_underfilled_pairs_excluded": (
+                    footprint_underfilled_pairs_excluded
+                ),
                 "controls_valid": controls_valid,
                 "invalid_reason": ";".join(invalid_reasons),
                 "acceptance_match_ratio": (
@@ -475,11 +500,7 @@ def analyze_capture_pairs(
                 "context_match_ratio": (
                     float("nan") if pair_count == 0 else context_matches / pair_count
                 ),
-                "runtime_batch_match_ratio": (
-                    float("nan")
-                    if pair_count == 0
-                    else runtime_batch_matches / pair_count
-                ),
+                "runtime_batch_match_ratio": float("nan") if pair_count == 0 else 1.0,
                 "sharing_speedup_p25_percent": _percentile(timing_speedups, 0.25),
                 "sharing_speedup_median_percent": (
                     statistics.median(timing_speedups)
@@ -500,18 +521,6 @@ def analyze_capture_pairs(
             }
         )
     return rows
-
-
-def _footprint_values(
-    capture: dict[str, Any] | None, *, discard_first: int
-) -> list[float]:
-    if capture is None:
-        return []
-    return [
-        float(record["page_reuse_ratio"])
-        for record in capture["recorder"]["records"][discard_first:]
-        if "page_reuse_ratio" in record
-    ]
 
 
 def aggregate_m0_rows(

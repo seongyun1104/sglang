@@ -125,6 +125,37 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
         self.assertIn("acceptance_trajectory_mismatch", rows[0]["invalid_reason"])
         self.assertTrue(math.isnan(rows[0]["sharing_speedup_median_percent"]))
 
+    def test_symmetric_early_eos_tail_is_excluded(self):
+        acceptance = [[2] * 8, [1] * 7]
+        shared = _capture("shared", [8.0, 9.0], acceptance)
+        duplicated = _capture("duplicated", [10.0, 10.0], acceptance)
+        shared_footprint = _footprint_capture("shared", acceptance, 0.8)
+        duplicated_footprint = _footprint_capture("duplicated", acceptance, 0.0)
+        for capture in (shared, duplicated, shared_footprint, duplicated_footprint):
+            capture["recorder"]["records"][-1]["batch_size"] = 7
+            capture["recorder"]["records"][-1]["logical_context_lengths"] = [
+                8192
+            ] * 7
+        rows = analyze_capture_pairs(
+            [shared, duplicated, shared_footprint, duplicated_footprint],
+            discard_first=0,
+            footprint_discard_first=0,
+        )
+        row = rows[0]
+        self.assertTrue(row["controls_valid"])
+        self.assertEqual(row["paired_records"], 1)
+        self.assertEqual(row["timing_underfilled_pairs_excluded"], 1)
+        self.assertEqual(row["footprint_underfilled_pairs_excluded"], 1)
+
+    def test_asymmetric_early_eos_tail_invalidates_cell(self):
+        acceptance = [[2] * 8]
+        shared = _capture("shared", [8.0], acceptance)
+        duplicated = _capture("duplicated", [10.0], acceptance)
+        shared["recorder"]["records"][0]["batch_size"] = 7
+        rows = analyze_capture_pairs([shared, duplicated], discard_first=0)
+        self.assertFalse(rows[0]["controls_valid"])
+        self.assertIn("asymmetric_runtime_batch_size", rows[0]["invalid_reason"])
+
     def test_aggregate_requires_consistent_resolved_seed_effects(self):
         rows = [
             {
