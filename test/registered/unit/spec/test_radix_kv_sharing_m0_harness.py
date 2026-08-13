@@ -162,6 +162,60 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
             self.assertEqual(selected.speculative_num_steps, 2)
             self.assertEqual(run.call_args.kwargs["output_length_override"], 16)
 
+    def test_run_cell_passes_server_model_path_to_client(self):
+        cell = build_cells(
+            batch_sizes=(8,),
+            context_lengths=(8192,),
+            steps=(2,),
+            seeds=(17,),
+        )[0]
+        server_info = {
+            "internal_states": [
+                {
+                    "model_path": "target-model",
+                    "disable_radix_cache": False,
+                    "speculative_adaptive": False,
+                    "speculative_eagle_topk": 1,
+                    "speculative_num_steps": 2,
+                    "speculative_num_draft_tokens": 3,
+                    "radix_kv_m0_record": {
+                        "components": ["target_verify_gpu_time"],
+                        "records": [],
+                    },
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+
+            def fake_run(command, *, check):
+                self.assertTrue(check)
+                model_index = command.index("--model-path")
+                self.assertEqual(command[model_index + 1], "target-model")
+                result_index = command.index("--result-filename")
+                Path(command[result_index + 1]).write_text(
+                    json.dumps(
+                        {
+                            "input_fingerprints": ["prompt-a"] * 8,
+                            "seed": 17,
+                        }
+                    )
+                    + "\n"
+                )
+
+            with (
+                patch.object(harness, "_get_json", return_value=server_info),
+                patch.object(harness.subprocess, "run", side_effect=fake_run),
+                patch.object(harness, "_git_head", return_value="test-head"),
+            ):
+                capture_path = harness.run_cell(
+                    cell=cell,
+                    base_url="http://server",
+                    output_dir=output_dir,
+                )
+            capture = json.loads(capture_path.read_text())
+            self.assertEqual(capture["server"]["model_path"], "target-model")
+
 
 if __name__ == "__main__":
     unittest.main()

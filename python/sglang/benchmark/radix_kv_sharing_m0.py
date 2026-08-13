@@ -158,6 +158,10 @@ def run_cell(
     before = _get_json(server_info_url)
     _validate_server(cell, before)
     recorder_before = _find_recorder(before)
+    internal_state_before = before["internal_states"][0]
+    model_path = before.get("model_path", internal_state_before.get("model_path"))
+    if not model_path:
+        raise RuntimeError("server_info does not expose the required model_path")
     component_tag = "-".join(recorder_before["components"])
     output_length = (
         cell.output_length
@@ -178,6 +182,8 @@ def run_cell(
         "sglang.benchmark.one_batch_server",
         "--base-url",
         base_url,
+        "--model-path",
+        str(model_path),
         "--batch-size",
         str(cell.batch_size),
         "--input-len",
