@@ -137,6 +137,23 @@ The first matrix is a screen, not a publishable percent-level claim. If it emits
 (`shared → duplicated → duplicated → shared`) and clock/temperature/power telemetry.
 The signal must survive that confirmation before starting M1.
 
+The current screen emitted a signal in every cell. The confirmation therefore keeps
+the four `BS × context` corners but restricts fixed K to `0` and `4`. It runs timing
+only; the full screen already established physical-layout separation with a distinct
+footprint pass. Both restart orders must independently pass prompt, acceptance,
+logical-context, provenance, and runtime-batch controls, and every seed must retain
+the same resolved direction:
+
+```bash
+RESULT_ROOT=results/radix-kv-sharing-m0-confirmation \
+benchmark/radix_kv_sharing_m0/run_confirmation.sh
+```
+
+The output status is `M0_CONFIRMED` only when all three seeds exceed the configured
+measurement floor in both execution orders. A confirmation result does not imply an
+optimal-K shift. M1 remains blocked until a semantically coherent shared-prefix
+workload produces non-zero draft acceptance while retaining the paired controls.
+
 ## Screen runner
 
 `run_screen.sh` automates the twelve required server configurations, retains server

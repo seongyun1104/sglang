@@ -282,6 +282,7 @@ def analyze_capture_pairs(
     *,
     discard_first: int = 5,
     footprint_discard_first: int = 1,
+    require_footprint: bool = True,
 ) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, int, int, int], dict[str, dict[str, dict[str, Any]]]] = {}
     for capture in captures:
@@ -327,7 +328,7 @@ def analyze_capture_pairs(
         context_matches = 0
         timing_underfilled_pairs_excluded = 0
         invalid_reasons: list[str] = []
-        if any(
+        if require_footprint and any(
             "kv_footprint" not in captures_by_component
             for captures_by_component in arms.values()
         ):
@@ -588,6 +589,140 @@ def aggregate_m0_rows(
     return aggregates
 
 
+def analyze_counterbalanced_confirmation(
+    forward_rows: Sequence[dict[str, Any]],
+    reverse_rows: Sequence[dict[str, Any]],
+    *,
+    minimum_effect_percent: float,
+    required_seeds: int = 3,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Require the physical-sharing signal to survive both restart orders.
+
+    ``forward_rows`` come from ``shared -> duplicated`` execution and
+    ``reverse_rows`` from ``duplicated -> shared`` execution. Physical-layout
+    separation is established by the full M0 screen; this confirmation isolates
+    timing order and therefore does not require another footprint pass.
+    """
+    if minimum_effect_percent <= 0:
+        raise ValueError("minimum_effect_percent must be positive")
+    if required_seeds <= 0:
+        raise ValueError("required_seeds must be positive")
+
+    def row_key(row: dict[str, Any]) -> tuple[int, int, int, int]:
+        return (
+            int(row["batch_size"]),
+            int(row["context_length"]),
+            int(row["speculative_num_steps"]),
+            int(row["seed"]),
+        )
+
+    forward = {row_key(row): row for row in forward_rows}
+    reverse = {row_key(row): row for row in reverse_rows}
+    if set(forward) != set(reverse):
+        missing_forward = sorted(set(reverse) - set(forward))
+        missing_reverse = sorted(set(forward) - set(reverse))
+        raise RuntimeError(
+            "counterbalanced row sets differ: "
+            f"missing_forward={missing_forward}, missing_reverse={missing_reverse}"
+        )
+
+    paired_rows: list[dict[str, Any]] = []
+    for key in sorted(forward):
+        forward_row = forward[key]
+        reverse_row = reverse[key]
+        forward_effect = float(forward_row["sharing_speedup_median_percent"])
+        reverse_effect = float(reverse_row["sharing_speedup_median_percent"])
+        controls_valid = bool(forward_row["controls_valid"]) and bool(
+            reverse_row["controls_valid"]
+        )
+        same_direction = (
+            forward_effect > 0 and reverse_effect > 0
+        ) or (forward_effect < 0 and reverse_effect < 0)
+        both_above_resolution = (
+            abs(forward_effect) >= minimum_effect_percent
+            and abs(reverse_effect) >= minimum_effect_percent
+        )
+        paired_rows.append(
+            {
+                "batch_size": key[0],
+                "context_length": key[1],
+                "speculative_num_steps": key[2],
+                "seed": key[3],
+                "forward_controls_valid": bool(forward_row["controls_valid"]),
+                "reverse_controls_valid": bool(reverse_row["controls_valid"]),
+                "controls_valid": controls_valid,
+                "forward_speedup_percent": forward_effect,
+                "reverse_speedup_percent": reverse_effect,
+                "counterbalanced_median_speedup_percent": statistics.median(
+                    (forward_effect, reverse_effect)
+                ),
+                "order_gap_percent_points": abs(forward_effect - reverse_effect),
+                "same_direction_across_orders": same_direction,
+                "both_orders_above_resolution": both_above_resolution,
+                "forward_invalid_reason": forward_row["invalid_reason"],
+                "reverse_invalid_reason": reverse_row["invalid_reason"],
+            }
+        )
+
+    grouped: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
+    for row in paired_rows:
+        key = (
+            int(row["batch_size"]),
+            int(row["context_length"]),
+            int(row["speculative_num_steps"]),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    aggregate_rows: list[dict[str, Any]] = []
+    for (batch_size, context_length, steps), seed_rows in sorted(grouped.items()):
+        valid = [row for row in seed_rows if bool(row["controls_valid"])]
+        confirmed = [
+            row
+            for row in valid
+            if bool(row["same_direction_across_orders"])
+            and bool(row["both_orders_above_resolution"])
+        ]
+        effects = [
+            float(row["counterbalanced_median_speedup_percent"]) for row in valid
+        ]
+        positive = sum(effect > 0 for effect in effects)
+        negative = sum(effect < 0 for effect in effects)
+        same_direction_across_seeds = bool(effects) and (
+            positive == len(effects) or negative == len(effects)
+        )
+        if len(valid) < required_seeds:
+            status = "INVALID_CONTROLS"
+        elif len(confirmed) != len(valid):
+            status = "ORDER_SENSITIVE_OR_BELOW_RESOLUTION"
+        elif not same_direction_across_seeds:
+            status = "MIXED_DIRECTION"
+        else:
+            status = "M0_CONFIRMED"
+        aggregate_rows.append(
+            {
+                "batch_size": batch_size,
+                "context_length": context_length,
+                "speculative_num_steps": steps,
+                "seed_rows": len(seed_rows),
+                "valid_seed_rows": len(valid),
+                "confirmed_seed_rows": len(confirmed),
+                "minimum_effect_percent": minimum_effect_percent,
+                "counterbalanced_speedup_across_seed_median_percent": (
+                    statistics.median(effects) if effects else float("nan")
+                ),
+                "counterbalanced_speedup_across_seed_min_percent": (
+                    min(effects) if effects else float("nan")
+                ),
+                "counterbalanced_speedup_across_seed_max_percent": (
+                    max(effects) if effects else float("nan")
+                ),
+                "same_direction_across_seeds": same_direction_across_seeds,
+                "m0_confirmation_status": status,
+            }
+        )
+    return paired_rows, aggregate_rows
+
+
 def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -693,6 +828,16 @@ def main() -> None:
     analyze.add_argument("--footprint-discard-first", type=int, default=1)
     analyze.add_argument("--minimum-effect-percent", type=float, required=True)
 
+    confirm = subparsers.add_parser(
+        "confirm", help="analyze shared-first and duplicated-first timing pairs"
+    )
+    confirm.add_argument("--forward-captures", type=Path, nargs="+", required=True)
+    confirm.add_argument("--reverse-captures", type=Path, nargs="+", required=True)
+    confirm.add_argument("--output", type=Path, required=True)
+    confirm.add_argument("--aggregate-output", type=Path, required=True)
+    confirm.add_argument("--discard-first", type=int, default=5)
+    confirm.add_argument("--minimum-effect-percent", type=float, required=True)
+
     args = parser.parse_args()
     if args.command == "plan":
         cells = build_cells(
@@ -740,7 +885,7 @@ def main() -> None:
         )
         for path in paths:
             print(path)
-    else:
+    elif args.command == "analyze":
         rows = analyze_capture_pairs(
             _load_captures(args.captures),
             discard_first=args.discard_first,
@@ -751,6 +896,26 @@ def main() -> None:
             args.aggregate_output,
             aggregate_m0_rows(rows, minimum_effect_percent=args.minimum_effect_percent),
         )
+        print(args.output)
+        print(args.aggregate_output)
+    else:
+        forward_rows = analyze_capture_pairs(
+            _load_captures(args.forward_captures),
+            discard_first=args.discard_first,
+            require_footprint=False,
+        )
+        reverse_rows = analyze_capture_pairs(
+            _load_captures(args.reverse_captures),
+            discard_first=args.discard_first,
+            require_footprint=False,
+        )
+        paired_rows, aggregate_rows = analyze_counterbalanced_confirmation(
+            forward_rows,
+            reverse_rows,
+            minimum_effect_percent=args.minimum_effect_percent,
+        )
+        _write_csv(args.output, paired_rows)
+        _write_csv(args.aggregate_output, aggregate_rows)
         print(args.output)
         print(args.aggregate_output)
 

@@ -9,6 +9,7 @@ from unittest.mock import patch
 import sglang.benchmark.radix_kv_sharing_m0 as harness
 from sglang.benchmark.radix_kv_sharing_m0 import (
     aggregate_m0_rows,
+    analyze_counterbalanced_confirmation,
     analyze_capture_pairs,
     build_cells,
 )
@@ -173,6 +174,52 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
         rows[1]["sharing_speedup_median_percent"] = 1.0
         result = aggregate_m0_rows(rows, minimum_effect_percent=2.0)
         self.assertEqual(result[0]["m0_status"], "BELOW_RESOLUTION")
+
+    def test_counterbalanced_confirmation_requires_both_orders(self):
+        def row(seed, effect):
+            return {
+                "batch_size": 8,
+                "context_length": 8192,
+                "speculative_num_steps": 4,
+                "seed": seed,
+                "controls_valid": True,
+                "invalid_reason": "",
+                "sharing_speedup_median_percent": effect,
+            }
+
+        forward = [row(seed, effect) for seed, effect in zip((17, 29, 41), (8, 9, 10))]
+        reverse = [row(seed, effect) for seed, effect in zip((17, 29, 41), (7, 8, 9))]
+        paired, aggregate = analyze_counterbalanced_confirmation(
+            forward,
+            reverse,
+            minimum_effect_percent=2.0,
+        )
+        self.assertEqual(len(paired), 3)
+        self.assertEqual(aggregate[0]["m0_confirmation_status"], "M0_CONFIRMED")
+
+        reverse[1]["sharing_speedup_median_percent"] = -8
+        _, aggregate = analyze_counterbalanced_confirmation(
+            forward,
+            reverse,
+            minimum_effect_percent=2.0,
+        )
+        self.assertEqual(
+            aggregate[0]["m0_confirmation_status"],
+            "ORDER_SENSITIVE_OR_BELOW_RESOLUTION",
+        )
+
+    def test_confirmation_timing_analysis_can_reuse_screen_footprint_proof(self):
+        acceptance = [[1] * 8]
+        rows = analyze_capture_pairs(
+            [
+                _capture("shared", [8.0], acceptance),
+                _capture("duplicated", [10.0], acceptance),
+            ],
+            discard_first=0,
+            require_footprint=False,
+        )
+        self.assertTrue(rows[0]["controls_valid"])
+        self.assertNotIn("missing_kv_footprint_pass", rows[0]["invalid_reason"])
 
     def test_run_matching_selects_current_layout_and_k(self):
         with tempfile.TemporaryDirectory() as directory:
