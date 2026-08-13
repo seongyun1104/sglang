@@ -13,6 +13,11 @@ M0_SEEDS="${M0_SEEDS:-17 29 41}"
 M0_COMPONENTS="${M0_COMPONENTS:-target_verify_gpu_time kv_footprint}"
 M0_MINIMUM_EFFECT_PERCENT="${M0_MINIMUM_EFFECT_PERCENT:-2.0}"
 
+# The released EAGLE3 draft checkpoint advertises a 2K derived context even
+# though SGLang's long-context EAGLE path uses the target model's positions.
+# Keep the override explicit and local to this experiment process.
+export SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN="${SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN:-1}"
+
 read -r -a batch_sizes <<<"${M0_BATCH_SIZES}"
 read -r -a context_lengths <<<"${M0_CONTEXT_LENGTHS}"
 read -r -a steps <<<"${M0_STEPS}"

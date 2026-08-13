@@ -30,6 +30,12 @@ draft:  lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B
 dtype:  BF16
 ```
 
+The released draft checkpoint reports a derived 2K context limit. The M0
+runner explicitly sets `SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1`, matching
+SGLang's long-context speculative test setup, so the 8K/16K cells can start.
+This override is recorded as part of the experiment contract and must be held
+constant across shared and duplicated layouts.
+
 ## Required two-pass measurement
 
 Timing and physical-page accounting run in separate server processes. Page-table
