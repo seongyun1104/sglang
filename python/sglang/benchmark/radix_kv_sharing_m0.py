@@ -281,7 +281,7 @@ def analyze_capture_pairs(
     captures: Iterable[dict[str, Any]],
     *,
     discard_first: int = 5,
-    footprint_discard_first: int = 0,
+    footprint_discard_first: int = 1,
 ) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, int, int, int], dict[str, dict[str, dict[str, Any]]]] = {}
     for capture in captures:
@@ -681,7 +681,7 @@ def main() -> None:
     analyze.add_argument("--output", type=Path, required=True)
     analyze.add_argument("--aggregate-output", type=Path, required=True)
     analyze.add_argument("--discard-first", type=int, default=5)
-    analyze.add_argument("--footprint-discard-first", type=int, default=0)
+    analyze.add_argument("--footprint-discard-first", type=int, default=1)
     analyze.add_argument("--minimum-effect-percent", type=float, required=True)
 
     args = parser.parse_args()

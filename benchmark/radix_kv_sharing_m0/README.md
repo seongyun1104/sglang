@@ -85,7 +85,9 @@ python -m sglang.benchmark.radix_kv_sharing_m0 run-matching \
 Repeat against the accounting server, writing to a distinct directory. The footprint
 pass uses 16 output tokens because it establishes physical-layout separation rather
 than estimating latency; prompt fingerprints still have to match the timing pass, and
-the two footprint layouts must have identical acceptance trajectories:
+the two footprint layouts must have identical acceptance trajectories. The analyzer
+excludes the first footprint decode record as warmup, then requires exact acceptance
+and logical-context equality for every retained record:
 
 ```bash
 python -m sglang.benchmark.radix_kv_sharing_m0 run-matching \

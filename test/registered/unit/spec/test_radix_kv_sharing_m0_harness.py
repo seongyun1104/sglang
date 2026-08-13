@@ -84,6 +84,7 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
                 _footprint_capture("duplicated", acceptance, 0.0),
             ],
             discard_first=0,
+            footprint_discard_first=0,
         )
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -94,6 +95,26 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
         self.assertAlmostEqual(row["sharing_speedup_median_percent"], 15.0)
         self.assertEqual(row["shared_page_reuse_median"], 0.8)
         self.assertEqual(row["duplicated_page_reuse_median"], 0.0)
+
+    def test_footprint_pass_discards_first_decode_warmup_record(self):
+        acceptance = [[0] * 8, [0] * 8]
+        shared_footprint = _footprint_capture("shared", acceptance, 0.8)
+        duplicated_footprint = _footprint_capture("duplicated", acceptance, 0.0)
+        duplicated_footprint["recorder"]["records"][0]["logical_context_lengths"] = [
+            8193
+        ] * 8
+        rows = analyze_capture_pairs(
+            [
+                _capture("shared", [8.0, 9.0], acceptance),
+                _capture("duplicated", [10.0, 10.0], acceptance),
+                shared_footprint,
+                duplicated_footprint,
+            ],
+            discard_first=0,
+        )
+        self.assertTrue(rows[0]["controls_valid"])
+        self.assertEqual(rows[0]["shared_page_reuse_median"], 0.8)
+        self.assertEqual(rows[0]["duplicated_page_reuse_median"], 0.0)
 
     def test_invalid_control_pair_suppresses_speedup(self):
         shared = _capture("shared", [8.0], [[2] * 8])
