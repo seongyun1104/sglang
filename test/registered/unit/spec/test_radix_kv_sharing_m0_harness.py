@@ -1,6 +1,12 @@
 import math
+import json
+import tempfile
 import unittest
+from dataclasses import asdict
+from pathlib import Path
+from unittest.mock import patch
 
+import sglang.benchmark.radix_kv_sharing_m0 as harness
 from sglang.benchmark.radix_kv_sharing_m0 import (
     aggregate_m0_rows,
     analyze_capture_pairs,
@@ -28,6 +34,22 @@ def _capture(layout, times, acceptances, *, component="target_verify_gpu_time"):
             "seed": 17,
         },
         "input_fingerprints": ["prompt-a"] * 8,
+        "client_seed": 17,
+        "harness_git_head": "test-head",
+        "server": {
+            "version": "test",
+            "model_path": "target",
+            "speculative_draft_model_path": "draft",
+            "attention_backend": "fa3",
+            "dtype": "bfloat16",
+            "device": "cuda",
+            "tp_size": 1,
+            "dp_size": 1,
+            "page_size": 1,
+            "disable_cuda_graph": False,
+            "speculative_num_steps": 2,
+            "speculative_num_draft_tokens": 3,
+        },
         "recorder": {"components": [component], "records": records},
     }
 
@@ -99,6 +121,46 @@ class TestRadixKVSharingM0Harness(unittest.TestCase):
         rows[1]["sharing_speedup_median_percent"] = 1.0
         result = aggregate_m0_rows(rows, minimum_effect_percent=2.0)
         self.assertEqual(result[0]["m0_status"], "BELOW_RESOLUTION")
+
+    def test_run_matching_selects_current_layout_and_k(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan_dir = Path(directory) / "plan"
+            output_dir = Path(directory) / "output"
+            plan_dir.mkdir()
+            for cell in build_cells(
+                batch_sizes=(8,),
+                context_lengths=(8192,),
+                steps=(0, 2),
+                seeds=(17,),
+            ):
+                (plan_dir / f"{cell.cell_id}.json").write_text(json.dumps(asdict(cell)))
+            server_info = {
+                "internal_states": [
+                    {
+                        "disable_radix_cache": False,
+                        "speculative_num_steps": 2,
+                        "radix_kv_m0_record": {
+                            "components": ["target_verify_gpu_time"]
+                        },
+                    }
+                ]
+            }
+            expected = output_dir / "capture.json"
+            with (
+                patch.object(harness, "_get_json", return_value=server_info),
+                patch.object(harness, "run_cell", return_value=expected) as run,
+            ):
+                captures = harness.run_matching_cells(
+                    plan_dir=plan_dir,
+                    base_url="http://server",
+                    output_dir=output_dir,
+                    output_length_override=16,
+                )
+            self.assertEqual(captures, [expected])
+            selected = run.call_args.kwargs["cell"]
+            self.assertEqual(selected.layout, "shared")
+            self.assertEqual(selected.speculative_num_steps, 2)
+            self.assertEqual(run.call_args.kwargs["output_length_override"], 16)
 
 
 if __name__ == "__main__":

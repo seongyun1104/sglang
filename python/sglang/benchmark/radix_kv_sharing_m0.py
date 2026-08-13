@@ -151,6 +151,7 @@ def run_cell(
     base_url: str,
     output_dir: Path,
     local_tokenizer_path: str = "",
+    output_length_override: int | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     server_info_url = base_url.rstrip("/") + "/server_info"
@@ -158,6 +159,13 @@ def run_cell(
     _validate_server(cell, before)
     recorder_before = _find_recorder(before)
     component_tag = "-".join(recorder_before["components"])
+    output_length = (
+        cell.output_length
+        if output_length_override is None
+        else int(output_length_override)
+    )
+    if output_length <= 0:
+        raise ValueError("output length must be positive")
 
     result_path = output_dir / f"{cell.cell_id}-{component_tag}-client.jsonl"
     if result_path.exists():
@@ -175,7 +183,7 @@ def run_cell(
         "--input-len",
         str(cell.context_length),
         "--output-len",
-        str(cell.output_length),
+        str(output_length),
         "--dataset-name",
         "generated-shared-prefix",
         "--gsp-num-groups",
@@ -185,7 +193,7 @@ def run_cell(
         "--gsp-question-len",
         str(cell.question_length),
         "--gsp-output-len",
-        str(cell.output_length),
+        str(output_length),
         "--seed",
         str(cell.seed),
         "--skip-warmup",
@@ -225,6 +233,7 @@ def run_cell(
         "client_result": str(result_path),
         "input_fingerprints": client_result.get("input_fingerprints"),
         "client_seed": client_result.get("seed"),
+        "actual_output_length": output_length,
         "server": {
             "version": server_value("version"),
             "model_path": server_value("model_path"),
@@ -263,7 +272,10 @@ def _percentile(values: Sequence[float], fraction: float) -> float:
 
 
 def analyze_capture_pairs(
-    captures: Iterable[dict[str, Any]], *, discard_first: int = 5
+    captures: Iterable[dict[str, Any]],
+    *,
+    discard_first: int = 5,
+    footprint_discard_first: int = 0,
 ) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, int, int, int], dict[str, dict[str, dict[str, Any]]]] = {}
     for capture in captures:
@@ -280,7 +292,13 @@ def analyze_capture_pairs(
                 f"capture {capture.get('cell_id')} must contain exactly one component"
             )
         component = components[0]
-        grouped.setdefault(key, {}).setdefault(cell["layout"], {})[component] = capture
+        by_component = grouped.setdefault(key, {}).setdefault(cell["layout"], {})
+        if component in by_component:
+            raise RuntimeError(
+                f"duplicate capture for {key}, layout={cell['layout']}, "
+                f"component={component}"
+            )
+        by_component[component] = capture
 
     rows: list[dict[str, Any]] = []
     for (batch_size, context_length, steps, seed), arms in sorted(grouped.items()):
@@ -308,40 +326,48 @@ def analyze_capture_pairs(
             for captures_by_component in arms.values()
         ):
             invalid_reasons.append("missing_kv_footprint_pass")
-        prompt_fingerprints = [
-            capture.get("input_fingerprints")
+        all_captures = [
+            capture
             for captures_by_component in arms.values()
             for capture in captures_by_component.values()
+        ]
+        prompt_fingerprints = [
+            capture.get("input_fingerprints") for capture in all_captures
         ]
         if not prompt_fingerprints or any(
             value is None or value != prompt_fingerprints[0]
             for value in prompt_fingerprints
         ):
             invalid_reasons.append("prompt_fingerprint_mismatch")
-        all_record_sets = [
-            capture["recorder"]["records"][discard_first:]
-            for captures_by_component in arms.values()
-            for capture in captures_by_component.values()
+        if any(int(capture.get("client_seed", -1)) != seed for capture in all_captures):
+            invalid_reasons.append("client_seed_mismatch")
+        git_heads = [capture.get("harness_git_head") for capture in all_captures]
+        if not git_heads or any(
+            head is None or head != git_heads[0] for head in git_heads
+        ):
+            invalid_reasons.append("harness_git_head_mismatch")
+        server_keys = (
+            "version",
+            "model_path",
+            "speculative_draft_model_path",
+            "attention_backend",
+            "dtype",
+            "device",
+            "tp_size",
+            "dp_size",
+            "page_size",
+            "disable_cuda_graph",
+            "speculative_num_steps",
+            "speculative_num_draft_tokens",
+        )
+        server_signatures = [
+            tuple(capture["server"].get(key) for key in server_keys)
+            for capture in all_captures
         ]
-        if any(len(records) != len(shared_records) for records in all_record_sets):
-            invalid_reasons.append("record_count_mismatch")
-        if any(
-            [record.get("correct_drafts_per_req") for record in records]
-            != [record.get("correct_drafts_per_req") for record in shared_records]
-            for records in all_record_sets
-        ):
-            invalid_reasons.append("cross_pass_acceptance_trajectory_mismatch")
-        if any(
-            [record.get("logical_context_lengths") for record in records]
-            != [record.get("logical_context_lengths") for record in shared_records]
-            for records in all_record_sets
-        ):
-            invalid_reasons.append("cross_pass_context_trajectory_mismatch")
-        if any(
-            any(int(record.get("batch_size", -1)) != batch_size for record in records)
-            for records in all_record_sets
-        ):
-            invalid_reasons.append("cross_pass_runtime_batch_size_mismatch")
+        if any(signature != server_signatures[0] for signature in server_signatures):
+            invalid_reasons.append("server_provenance_mismatch")
+        if len(shared_records) != len(duplicated_records):
+            invalid_reasons.append("timing_record_count_mismatch")
         for shared, duplicated in zip(
             shared_records[:pair_count], duplicated_records[:pair_count], strict=True
         ):
@@ -375,27 +401,58 @@ def analyze_capture_pairs(
             invalid_reasons.append("logical_context_trajectory_mismatch")
         if runtime_batch_matches != pair_count:
             invalid_reasons.append("runtime_batch_size_mismatch")
-        controls_valid = pair_count > 0 and not invalid_reasons
-        if not controls_valid:
-            timing_speedups.clear()
-
         footprint_arms = {
             layout: captures_by_component.get("kv_footprint")
             for layout, captures_by_component in arms.items()
         }
         shared_page_reuse = _footprint_values(
-            footprint_arms["shared"], discard_first=discard_first
+            footprint_arms["shared"], discard_first=footprint_discard_first
         )
         duplicated_page_reuse = _footprint_values(
-            footprint_arms["duplicated"], discard_first=discard_first
+            footprint_arms["duplicated"], discard_first=footprint_discard_first
         )
+        if all(capture is not None for capture in footprint_arms.values()):
+            shared_footprint = footprint_arms["shared"]
+            duplicated_footprint = footprint_arms["duplicated"]
+            assert shared_footprint is not None and duplicated_footprint is not None
+            shared_footprint_records = shared_footprint["recorder"]["records"][
+                footprint_discard_first:
+            ]
+            duplicated_footprint_records = duplicated_footprint["recorder"]["records"][
+                footprint_discard_first:
+            ]
+            if len(shared_footprint_records) != len(duplicated_footprint_records):
+                invalid_reasons.append("footprint_record_count_mismatch")
+            if [
+                record.get("correct_drafts_per_req")
+                for record in shared_footprint_records
+            ] != [
+                record.get("correct_drafts_per_req")
+                for record in duplicated_footprint_records
+            ]:
+                invalid_reasons.append("footprint_acceptance_trajectory_mismatch")
+            if [
+                record.get("logical_context_lengths")
+                for record in shared_footprint_records
+            ] != [
+                record.get("logical_context_lengths")
+                for record in duplicated_footprint_records
+            ]:
+                invalid_reasons.append("footprint_context_trajectory_mismatch")
+            if any(
+                int(record.get("batch_size", -1)) != batch_size
+                for records in (shared_footprint_records, duplicated_footprint_records)
+                for record in records
+            ):
+                invalid_reasons.append("footprint_runtime_batch_size_mismatch")
         if shared_page_reuse and duplicated_page_reuse:
             if statistics.median(shared_page_reuse) <= statistics.median(
                 duplicated_page_reuse
             ):
                 invalid_reasons.append("physical_layout_not_distinct")
-                controls_valid = False
-                timing_speedups.clear()
+        controls_valid = pair_count > 0 and not invalid_reasons
+        if not controls_valid:
+            timing_speedups.clear()
 
         rows.append(
             {
@@ -539,6 +596,48 @@ def _parse_cell(path: Path) -> Cell:
     return Cell(**data)
 
 
+def run_matching_cells(
+    *,
+    plan_dir: Path,
+    base_url: str,
+    output_dir: Path,
+    local_tokenizer_path: str = "",
+    output_length_override: int | None = None,
+    skip_existing: bool = False,
+) -> list[Path]:
+    server_info = _get_json(base_url.rstrip("/") + "/server_info")
+    state = server_info["internal_states"][0]
+    layout = "duplicated" if bool(state.get("disable_radix_cache")) else "shared"
+    steps = int(state.get("speculative_num_steps", -1))
+    component_tag = "-".join(_find_recorder(server_info)["components"])
+    selected = []
+    for path in sorted(plan_dir.glob("bs*.json")):
+        cell = _parse_cell(path)
+        if cell.layout == layout and cell.speculative_num_steps == steps:
+            selected.append(cell)
+    if not selected:
+        raise RuntimeError(
+            f"no plan cells match server layout={layout}, K={steps} in {plan_dir}"
+        )
+
+    captures = []
+    for cell in selected:
+        capture_path = output_dir / f"{cell.cell_id}-{component_tag}-capture.json"
+        if skip_existing and capture_path.exists():
+            captures.append(capture_path)
+            continue
+        captures.append(
+            run_cell(
+                cell=cell,
+                base_url=base_url,
+                output_dir=output_dir,
+                local_tokenizer_path=local_tokenizer_path,
+                output_length_override=output_length_override,
+            )
+        )
+    return captures
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -559,12 +658,24 @@ def main() -> None:
     run.add_argument("--base-url", default="http://127.0.0.1:30000")
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--local-tokenizer-path", default="")
+    run.add_argument("--output-length-override", type=int)
+
+    run_matching = subparsers.add_parser(
+        "run-matching", help="run every plan cell matching the current server"
+    )
+    run_matching.add_argument("--plan-dir", type=Path, required=True)
+    run_matching.add_argument("--base-url", default="http://127.0.0.1:30000")
+    run_matching.add_argument("--output-dir", type=Path, required=True)
+    run_matching.add_argument("--local-tokenizer-path", default="")
+    run_matching.add_argument("--output-length-override", type=int)
+    run_matching.add_argument("--skip-existing", action="store_true")
 
     analyze = subparsers.add_parser("analyze", help="compare paired layout captures")
     analyze.add_argument("--captures", type=Path, nargs="+", required=True)
     analyze.add_argument("--output", type=Path, required=True)
     analyze.add_argument("--aggregate-output", type=Path, required=True)
     analyze.add_argument("--discard-first", type=int, default=5)
+    analyze.add_argument("--footprint-discard-first", type=int, default=0)
     analyze.add_argument("--minimum-effect-percent", type=float, required=True)
 
     args = parser.parse_args()
@@ -600,11 +711,25 @@ def main() -> None:
             base_url=args.base_url,
             output_dir=args.output_dir,
             local_tokenizer_path=args.local_tokenizer_path,
+            output_length_override=args.output_length_override,
         )
         print(path)
+    elif args.command == "run-matching":
+        paths = run_matching_cells(
+            plan_dir=args.plan_dir,
+            base_url=args.base_url,
+            output_dir=args.output_dir,
+            local_tokenizer_path=args.local_tokenizer_path,
+            output_length_override=args.output_length_override,
+            skip_existing=args.skip_existing,
+        )
+        for path in paths:
+            print(path)
     else:
         rows = analyze_capture_pairs(
-            _load_captures(args.captures), discard_first=args.discard_first
+            _load_captures(args.captures),
+            discard_first=args.discard_first,
+            footprint_discard_first=args.footprint_discard_first,
         )
         _write_csv(args.output, rows)
         _write_csv(

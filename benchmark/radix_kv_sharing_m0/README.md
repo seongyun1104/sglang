@@ -68,20 +68,24 @@ python -m sglang.benchmark.radix_kv_sharing_m0 plan \
   --output results/radix-kv-sharing-m0/plan
 ```
 
-For each launched server, run only cells whose filename matches its layout and K:
+For each launched server, run every cell matching its layout and K:
 
 ```bash
-python -m sglang.benchmark.radix_kv_sharing_m0 run-cell \
-  --cell results/radix-kv-sharing-m0/plan/bs8-ctx8192-shared-k2-seed17.json \
+python -m sglang.benchmark.radix_kv_sharing_m0 run-matching \
+  --plan-dir results/radix-kv-sharing-m0/plan \
   --output-dir results/radix-kv-sharing-m0/timing
 ```
 
-Repeat against the accounting server, writing to a distinct directory:
+Repeat against the accounting server, writing to a distinct directory. The footprint
+pass uses 16 output tokens because it establishes physical-layout separation rather
+than estimating latency; prompt fingerprints still have to match the timing pass, and
+the two footprint layouts must have identical acceptance trajectories:
 
 ```bash
-python -m sglang.benchmark.radix_kv_sharing_m0 run-cell \
-  --cell results/radix-kv-sharing-m0/plan/bs8-ctx8192-shared-k2-seed17.json \
-  --output-dir results/radix-kv-sharing-m0/footprint
+python -m sglang.benchmark.radix_kv_sharing_m0 run-matching \
+  --plan-dir results/radix-kv-sharing-m0/plan \
+  --output-dir results/radix-kv-sharing-m0/footprint \
+  --output-length-override 16
 ```
 
 Analyze both passes together:
@@ -100,9 +104,11 @@ python -m sglang.benchmark.radix_kv_sharing_m0 analyze \
 The analyzer suppresses speedup values unless all of the following hold:
 
 1. tokenized prompt SHA-256 fingerprints match across physical layouts and passes;
-2. the number of measured verify records matches;
-3. every per-step acceptance vector matches;
-4. every per-step logical-context vector matches.
+2. the number of measured verify records matches within each pass;
+3. every per-step acceptance vector matches between physical layouts;
+4. every per-step logical-context vector matches between physical layouts;
+5. the runtime batch size equals the preregistered batch size;
+6. measured physical page reuse is higher in the shared layout.
 
 `unique_physical_pages` and `page_reuse_ratio` are accounting quantities, not HBM
 traffic measurements. They are candidate predictors only.
@@ -115,6 +121,11 @@ resolution or is not reproducible across seeds, stop. Do not implement a control
 The minimum effect is an explicit analyzer input, not a hidden constant. `2.0` above
 is only the preregistered value for the first H100 run and must be replaced before
 execution if the timing preflight demonstrates a larger measurement floor.
+
+The first matrix is a screen, not a publishable percent-level claim. If it emits
+`M0_SIGNAL`, rerun only the positive cells with counterbalanced server restart order
+(`shared → duplicated → duplicated → shared`) and clock/temperature/power telemetry.
+The signal must survive that confirmation before starting M1.
 
 If M0 passes, M1 may expand the K sweep and test whether the optimal K changes. A
 feature PR is considered only after physical KV state adds meaningful oracle value
