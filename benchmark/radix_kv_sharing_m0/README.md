@@ -127,6 +127,23 @@ The first matrix is a screen, not a publishable percent-level claim. If it emits
 (`shared → duplicated → duplicated → shared`) and clock/temperature/power telemetry.
 The signal must survive that confirmation before starting M1.
 
+## Screen runner
+
+`run_screen.sh` automates the twelve required server configurations, retains server
+logs and 500 ms GPU telemetry, and stops on the first failed cell. A one-cell smoke is:
+
+```bash
+M0_BATCH_SIZES=8 \
+M0_CONTEXT_LENGTHS=8192 \
+M0_STEPS=2 \
+M0_SEEDS=17 \
+RESULT_ROOT=results/radix-kv-sharing-m0-smoke \
+benchmark/radix_kv_sharing_m0/run_screen.sh
+```
+
+Run the default matrix only after this smoke proves that the shared and duplicated
+page footprints are distinct and that all hard controls pass.
+
 If M0 passes, M1 may expand the K sweep and test whether the optimal K changes. A
 feature PR is considered only after physical KV state adds meaningful oracle value
 beyond the BS × context policy from PR #31716 and after feature-computation overhead.
