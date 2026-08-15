@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from sglang.srt.speculative.radix_kv_m0_observability import (
+    ACCEPTANCE,
     KV_FOOTPRINT,
     TARGET_VERIFY_GPU_TIME,
     compute_kv_footprint,
@@ -12,6 +13,7 @@ from sglang.srt.speculative.radix_kv_m0_observability import (
 
 class TestRadixKVM0Observability(unittest.TestCase):
     def test_components_require_separate_timing_and_footprint_runs(self):
+        self.assertEqual(resolve_components((ACCEPTANCE,)), {ACCEPTANCE})
         self.assertEqual(
             resolve_components((TARGET_VERIFY_GPU_TIME,)), {TARGET_VERIFY_GPU_TIME}
         )

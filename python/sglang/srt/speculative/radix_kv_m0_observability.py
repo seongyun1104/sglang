@@ -1,8 +1,9 @@
 """Opt-in observability for the Radix KV-sharing M0 falsification experiment.
 
-This module is deliberately not a controller.  It records either target-verify GPU
-time or the physical KV footprint for a decode batch.  Footprint collection launches
-GPU work and is therefore forbidden in the same process as timing collection.
+This module is deliberately not a controller. It records acceptance only,
+target-verify GPU time, or the physical KV footprint for a decode batch. Footprint
+collection launches GPU work and is therefore forbidden in the same process as
+timing collection.
 """
 
 from __future__ import annotations
@@ -15,9 +16,10 @@ from typing import Any, ContextManager, Iterator, Sequence
 import torch
 
 
+ACCEPTANCE = "acceptance"
 TARGET_VERIFY_GPU_TIME = "target_verify_gpu_time"
 KV_FOOTPRINT = "kv_footprint"
-_VALID_COMPONENTS = {TARGET_VERIFY_GPU_TIME, KV_FOOTPRINT}
+_VALID_COMPONENTS = {ACCEPTANCE, TARGET_VERIFY_GPU_TIME, KV_FOOTPRINT}
 _MAX_RECORDS = 200_000
 
 

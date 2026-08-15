@@ -160,6 +160,10 @@ from 12.55% to 27.61%. This closes M0, but not M1: the K=4 captures contained on
 non-zero correct-draft decisions among 73,708 request decisions. See
 `M0_CONFIRMATION_20260813.md` for the complete result and interpretation boundary.
 
+M0.5 is now the only next gate. It runs coherent shared-prefix workloads at K=2/4
+using an acceptance-only recorder and performs no layout or latency comparison. See
+`M0_5_ACCEPTANCE_GATE.md`. Controller and upstream work remain blocked.
+
 ## Screen runner
 
 `run_screen.sh` automates the twelve required server configurations, retains server

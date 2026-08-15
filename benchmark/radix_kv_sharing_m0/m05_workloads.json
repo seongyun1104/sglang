@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "chat_template": "llama3",
+  "workloads": [
+    {
+      "id": "short_qa",
+      "system_prompt": "You answer factual questions directly in one or two sentences. Do not add a preamble.",
+      "shared_user_prefix": "Examples:\nQuestion: What planet is known as the Red Planet?\nAnswer: Mars.\nQuestion: What gas do plants absorb from the atmosphere?\nAnswer: Carbon dioxide.\n\nQuestion: ",
+      "queries": [
+        "What is the capital of Canada?",
+        "Who wrote Pride and Prejudice?",
+        "What is the largest ocean on Earth?",
+        "Which element has the chemical symbol Fe?",
+        "How many sides does a hexagon have?",
+        "What process converts liquid water into vapor?",
+        "Which country contains the city of Kyoto?",
+        "What instrument measures atmospheric pressure?",
+        "What is the square root of 144?",
+        "Which organ pumps blood through the human body?",
+        "What language is primarily spoken in Brazil?",
+        "What is the freezing point of water in Celsius?"
+      ]
+    },
+    {
+      "id": "instruction",
+      "system_prompt": "You are a concise assistant. Follow the requested format exactly and return only the requested content.",
+      "shared_user_prefix": "Complete the following task clearly and accurately.\n\nTask: ",
+      "queries": [
+        "Rewrite 'The meeting was moved because the room was unavailable' in simpler language.",
+        "List three practical ways to reduce household electricity use.",
+        "Summarize the benefits of regular walking in two sentences.",
+        "Give a five-word title for an article about ocean conservation.",
+        "Explain the difference between weather and climate in two sentences.",
+        "Write a polite one-sentence reminder about an unpaid invoice.",
+        "Convert the phrase 'rapid improvement' into a formal alternative.",
+        "Name three items to check before an international flight.",
+        "Describe photosynthesis in one sentence for a middle-school student.",
+        "Write a short safety notice about a wet floor.",
+        "Provide two advantages of version control for software teams.",
+        "Turn 'We need the report today' into a courteous request."
+      ]
+    },
+    {
+      "id": "code_completion",
+      "system_prompt": "You are an expert Python programmer. Return only valid Python code without markdown fences.",
+      "shared_user_prefix": "Implement the requested function using the Python standard library. Include a short docstring.\n\n",
+      "queries": [
+        "def clamp(value: float, lower: float, upper: float) -> float:\n    # Return value limited to the inclusive range.",
+        "def flatten(items: list[list[int]]) -> list[int]:\n    # Preserve the original order.",
+        "def count_words(text: str) -> dict[str, int]:\n    # Count lowercase whitespace-separated words.",
+        "def unique_ordered(items: list[str]) -> list[str]:\n    # Remove duplicates while preserving first occurrence.",
+        "def chunked(items: list[int], size: int) -> list[list[int]]:\n    # Raise ValueError when size is not positive.",
+        "def is_palindrome(text: str) -> bool:\n    # Ignore case and non-alphanumeric characters.",
+        "def merge_counts(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:\n    # Sum values for shared keys.",
+        "def moving_average(values: list[float], window: int) -> list[float]:\n    # Return every complete-window average.",
+        "def invert_mapping(mapping: dict[str, str]) -> dict[str, list[str]]:\n    # Group original keys by value and sort each group.",
+        "def parse_bool(value: str) -> bool:\n    # Accept true/false, yes/no, and 1/0 case-insensitively.",
+        "def common_prefix(values: list[str]) -> str:\n    # Return the longest shared prefix.",
+        "def safe_divide(numerator: float, denominator: float, default: float = 0.0) -> float:\n    # Return default when denominator is zero."
+      ]
+    },
+    {
+      "id": "structured_json",
+      "system_prompt": "Return exactly one compact JSON object. Do not use markdown and do not add fields that were not requested.",
+      "shared_user_prefix": "Extract the requested fields using this schema: {\"topic\": string, \"priority\": \"low\"|\"medium\"|\"high\", \"action\": string}.\n\nInput: ",
+      "queries": [
+        "The payment service is unavailable for all customers. Escalate to the incident commander immediately.",
+        "Update the onboarding guide when convenient to reflect the new office address.",
+        "Several users cannot reset passwords. Ask the identity team to investigate today.",
+        "The weekly analytics report needs a corrected chart before tomorrow morning.",
+        "A typo appears in the footer of the marketing page. Fix it in the next content pass.",
+        "Database replication lag is increasing rapidly. Page the on-call engineer now.",
+        "The support FAQ lacks instructions for closing an account. Add them this week.",
+        "A test dependency has a minor update available. Schedule it for routine maintenance.",
+        "Checkout requests are returning errors in one region. Route traffic away and investigate.",
+        "The design team requested updated icon exports for the next release.",
+        "Audit logs are missing from the dashboard. Restore visibility before the compliance review.",
+        "An internal meeting room calendar has an outdated description. Correct it when available."
+      ]
+    }
+  ]
+}
