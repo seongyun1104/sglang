@@ -160,9 +160,11 @@ from 12.55% to 27.61%. This closes M0, but not M1: the K=4 captures contained on
 non-zero correct-draft decisions among 73,708 request decisions. See
 `M0_CONFIRMATION_20260813.md` for the complete result and interpretation boundary.
 
-M0.5 is now the only next gate. It runs coherent shared-prefix workloads at K=2/4
-using an acceptance-only recorder and performs no layout or latency comparison. See
-`M0_5_ACCEPTANCE_GATE.md`. Controller and upstream work remain blocked.
+M0.5 completed on 2026-08-16 with 24/24 valid seed-level captures. Code completion
+and structured JSON produced stable multi-draft acceptance, including full K=4
+acceptance in every seed. The materiality review authorizes only those workloads for
+a paired-layout M1 K sweep. See `M0_5_RESULT_20260816.md`. An optimal-K claim,
+controller implementation, and upstream feature PR remain blocked on M1.
 
 ## Screen runner
 

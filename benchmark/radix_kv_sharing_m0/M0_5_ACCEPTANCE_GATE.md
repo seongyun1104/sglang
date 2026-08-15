@@ -57,6 +57,14 @@ The analyzer always emits `m1_authorized=false`. M0.5 data must be reviewed befo
 paired physical-layout K sweep is authorized. This prevents a rare one-token accept
 from being mistaken for meaningful K=4 operation.
 
+## Recorded result
+
+The 2026-08-16 H100 NVL screen completed with 24/24 valid seed-level captures.
+Code completion and structured JSON both showed stable multi-draft behavior and
+full K=4 acceptance in every seed. Materiality review authorized those two exact
+workloads for M1; the analyzer output remains immutable and correctly records that
+authorization was not automatic. See `M0_5_RESULT_20260816.md`.
+
 ## Scope boundary
 
 M0.5 does not compare shared and duplicated layouts, measure a K optimum, modify the
