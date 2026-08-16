@@ -124,6 +124,7 @@ class BenchArgs:
     dataset_path: str = ""
     dataset_name: str = "random"
     fixed_prompt_file: str = ""
+    prompt_list_file: str = ""
     apply_chat_template: bool = False
     gsp_num_groups: int = 1
     gsp_system_prompt_len: int = 2048
@@ -228,6 +229,14 @@ class BenchArgs:
             default=BenchArgs.fixed_prompt_file,
             help="Use this file's prompt for every request in the batch, "
             "bypassing --dataset-name.",
+        )
+        parser.add_argument(
+            "--prompt-list-file",
+            type=str,
+            default=BenchArgs.prompt_list_file,
+            help="JSON file holding a list of exactly --batch-size prompt "
+            "strings (one per request). Each is tokenized as-is, bypassing "
+            "--dataset-name. Used to replay externally rendered prompts.",
         )
         parser.add_argument(
             "--apply-chat-template",
@@ -575,6 +584,7 @@ def run_one_case(
     lora_request_distribution: str = BenchArgs.lora_request_distribution,
     lora_zipf_alpha: float = BenchArgs.lora_zipf_alpha,
     fixed_prompt_file: str = "",
+    prompt_list_file: str = "",
     apply_chat_template: bool = False,
     seed: int = BenchArgs.seed,
 ):
@@ -590,6 +600,18 @@ def run_one_case(
             prompt_ids = _encode_fixed_prompt(tok_inner, f.read(), apply_chat_template)
         input_ids = [list(prompt_ids) for _ in range(batch_size)]
         input_len = len(prompt_ids)
+        image_data = None
+    elif prompt_list_file:
+        with open(prompt_list_file) as f:
+            prompts = json.load(f)
+        if not isinstance(prompts, list) or len(prompts) != batch_size:
+            raise ValueError(
+                f"--prompt-list-file must hold a list of {batch_size} prompts, "
+                f"got {type(prompts).__name__} of length "
+                f"{len(prompts) if isinstance(prompts, list) else 'n/a'}"
+            )
+        input_ids = [list(tokenizer.encode(prompt)) for prompt in prompts]
+        input_len = sum(len(ids) for ids in input_ids) // len(input_ids)
         image_data = None
     else:
         # Load input token ids via benchmark.datasets.get_dataset
@@ -1126,6 +1148,7 @@ def run_benchmark_internal(
                 lora_request_distribution=bench_args.lora_request_distribution,
                 lora_zipf_alpha=bench_args.lora_zipf_alpha,
                 fixed_prompt_file=bench_args.fixed_prompt_file,
+                prompt_list_file=bench_args.prompt_list_file,
                 apply_chat_template=bench_args.apply_chat_template,
                 seed=bench_args.seed,
                 **gsp_kwargs,
@@ -1172,6 +1195,7 @@ def run_benchmark_internal(
                     lora_request_distribution=bench_args.lora_request_distribution,
                     lora_zipf_alpha=bench_args.lora_zipf_alpha,
                     fixed_prompt_file=bench_args.fixed_prompt_file,
+                    prompt_list_file=bench_args.prompt_list_file,
                     apply_chat_template=bench_args.apply_chat_template,
                     seed=bench_args.seed,
                     **gsp_kwargs,

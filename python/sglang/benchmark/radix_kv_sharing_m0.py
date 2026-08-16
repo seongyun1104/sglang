@@ -152,6 +152,7 @@ def run_cell(
     output_dir: Path,
     local_tokenizer_path: str = "",
     output_length_override: int | None = None,
+    prompt_list_file: str = "",
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     server_info_url = base_url.rstrip("/") + "/server_info"
@@ -190,16 +191,23 @@ def run_cell(
         str(cell.context_length),
         "--output-len",
         str(output_length),
-        "--dataset-name",
-        "generated-shared-prefix",
-        "--gsp-num-groups",
-        "1",
-        "--gsp-system-prompt-len",
-        str(cell.system_prompt_length),
-        "--gsp-question-len",
-        str(cell.question_length),
-        "--gsp-output-len",
-        str(output_length),
+    ]
+    if prompt_list_file:
+        command += ["--prompt-list-file", str(prompt_list_file)]
+    else:
+        command += [
+            "--dataset-name",
+            "generated-shared-prefix",
+            "--gsp-num-groups",
+            "1",
+            "--gsp-system-prompt-len",
+            str(cell.system_prompt_length),
+            "--gsp-question-len",
+            str(cell.question_length),
+            "--gsp-output-len",
+            str(output_length),
+        ]
+    command += [
         "--seed",
         str(cell.seed),
         "--skip-warmup",
