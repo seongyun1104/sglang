@@ -812,10 +812,12 @@ def run_one_case(
                     if "error" in data:
                         raise RuntimeError(f"Request has failed. {data}.")
 
-                    assert (
-                        data["meta_info"]["finish_reason"] is None
-                        or data["meta_info"]["finish_reason"]["type"] == "length"
-                    )
+                    finish_reason = data["meta_info"]["finish_reason"]
+                    if finish_reason is not None:
+                        expected_finish_types = (
+                            {"length"} if ignore_eos else {"length", "stop"}
+                        )
+                        assert finish_reason["type"] in expected_finish_types
                     if data["meta_info"]["completion_tokens"] == 1:
                         last_ttft = time.perf_counter() - tic
 

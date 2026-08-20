@@ -43,6 +43,9 @@ Each timing order therefore requires exactly 72 unique cells:
 The footprint pass requires the same 72 logical cells. A missing, duplicate, or
 unexpected cell produces `M1_INCOMPLETE` before K* is computed.
 
+Natural EOS termination is valid only when `ignore_eos=false`; the benchmark client
+accepts `stop` and `length` finish reasons in that mode and continues to reject aborts.
+
 ## Timing definition
 
 The timing process uses:
