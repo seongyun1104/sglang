@@ -149,7 +149,12 @@ an upstream PR.
 
 ## Current state
 
-Desk implementation has not been pushed or run on a GPU. The runner refuses a dirty
-worktree so every artifact resolves to the recorded experiment commit. Before rental:
-run static checks and unit tests, commit locally, then audit this contract against the
-exact commit.
+The full H100 NVL run completed on 2026-08-21 at experiment commit
+`d05123e75c65fc940932042ad667b7b6ba941e91`. All 72 forward timing cells, 72 reverse
+timing cells, and 72 footprint cells were present; all paired controls passed.
+
+The outcome was `M1_NO_INTERACTION`. Code completion selected K=2 in both layouts,
+and structured JSON selected K=3 in both layouts. Seed-level K* values matched across
+layouts, and the largest absolute interaction was 0.628%, below the 2% effect floor.
+See `M1_RESULT_20260821.md`. This closes the track without a controller or upstream
+feature PR.

@@ -166,11 +166,13 @@ acceptance in every seed. The materiality review authorizes only those workloads
 a paired-layout M1 K sweep. See `M0_5_RESULT_20260816.md`. An optimal-K claim,
 controller implementation, and upstream feature PR remain blocked on M1.
 
-M1 desk work now uses a full speculative-cycle timing breakdown. Its primary metric
-includes draft and target-verification GPU time, preserves `ignore_eos=false`, hard
-fails incomplete 72-cell matrices, requires seed-level reproduction and a 2% effect
-floor, and automates ascending-AB / descending-BA execution. See `M1_PLAN.md` and
-`run_m1.sh`. No M1 GPU result exists yet.
+M1 completed on 2026-08-21 with all 216 required captures and all paired controls
+valid. Physical sharing did not move K*: code completion selected K=2 in both
+layouts, while structured JSON selected K=3 in both layouts. Every seed-level K*
+also matched across layouts, and the largest absolute sharing-by-K interaction was
+0.628%, below the preregistered 2% effect floor. The result is
+`M1_NO_INTERACTION`; do not implement a Radix-aware K controller or open an upstream
+feature PR from this track. See `M1_RESULT_20260821.md`.
 
 ## Screen runner
 
@@ -189,6 +191,6 @@ benchmark/radix_kv_sharing_m0/run_screen.sh
 Run the default matrix only after this smoke proves that the shared and duplicated
 page footprints are distinct and that all hard controls pass.
 
-If M0 passes, M1 may expand the K sweep and test whether the optimal K changes. A
-feature PR is considered only after physical KV state adds meaningful oracle value
-beyond the BS × context policy from PR #31716 and after feature-computation overhead.
+M0 passed, but the completed M1 sweep found no optimal-K interaction. The experiment
+track is closed as a valid negative result. PR #31716 remains independent and must
+not absorb a Radix physical-state axis from this work.
