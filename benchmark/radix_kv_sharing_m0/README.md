@@ -166,6 +166,12 @@ acceptance in every seed. The materiality review authorizes only those workloads
 a paired-layout M1 K sweep. See `M0_5_RESULT_20260816.md`. An optimal-K claim,
 controller implementation, and upstream feature PR remain blocked on M1.
 
+M1 desk work now uses a full speculative-cycle timing breakdown. Its primary metric
+includes draft and target-verification GPU time, preserves `ignore_eos=false`, hard
+fails incomplete 72-cell matrices, requires seed-level reproduction and a 2% effect
+floor, and automates ascending-AB / descending-BA execution. See `M1_PLAN.md` and
+`run_m1.sh`. No M1 GPU result exists yet.
+
 ## Screen runner
 
 `run_screen.sh` automates the twelve required server configurations, retains server

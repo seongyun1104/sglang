@@ -107,6 +107,7 @@ class BenchArgs:
     input_len: Tuple[int] = (1024,)
     output_len: Tuple[int] = (16,)
     temperature: float = 0.0
+    ignore_eos: bool = True
     return_logprob: bool = False
     client_stream_interval: int = 1
     input_len_step_percentage: float = 0.0
@@ -157,6 +158,13 @@ class BenchArgs:
             "--output-len", type=int, nargs="+", default=BenchArgs.output_len
         )
         parser.add_argument("--temperature", type=float, default=BenchArgs.temperature)
+        parser.add_argument(
+            "--respect-eos",
+            action="store_false",
+            dest="ignore_eos",
+            default=BenchArgs.ignore_eos,
+            help="Stop each request at EOS instead of forcing --output-len tokens.",
+        )
         parser.add_argument("--return-logprob", action="store_true")
         parser.add_argument(
             "--client-stream-interval",
@@ -455,7 +463,7 @@ def _warmup_cache(
         return
 
     print(
-        f"Warming up cache with {cache_hit_rate*100:.1f}% hit rate "
+        f"Warming up cache with {cache_hit_rate * 100:.1f}% hit rate "
         f"({cached_token_len} tokens per request)"
     )
     # Create prefix input_ids for cache warming
@@ -586,6 +594,7 @@ def run_one_case(
     fixed_prompt_file: str = "",
     prompt_list_file: str = "",
     apply_chat_template: bool = False,
+    ignore_eos: bool = True,
     seed: int = BenchArgs.seed,
 ):
     if backend == "vllm":
@@ -669,7 +678,7 @@ def run_one_case(
             "max_tokens": output_len,
             "temperature": temperature,
             "stream": True,
-            "ignore_eos": True,
+            "ignore_eos": ignore_eos,
         }
         if return_logprob:
             payload["logprobs"] = 1
@@ -693,7 +702,7 @@ def run_one_case(
             "sampling_params": {
                 "temperature": temperature,
                 "max_new_tokens": output_len,
-                "ignore_eos": True,
+                "ignore_eos": ignore_eos,
                 "json_schema": json_schema,
                 "stream_interval": stream_interval,
             },
@@ -913,7 +922,7 @@ def get_report_summary(
         f"\nInput lens: {bench_args.input_len}. Output lens: {bench_args.output_len}."
     )
     if bench_args.cache_hit_rate > 0.0:
-        summary += f" Cache hit rate: {bench_args.cache_hit_rate*100:.1f}%."
+        summary += f" Cache hit rate: {bench_args.cache_hit_rate * 100:.1f}%."
     summary += "\n"
 
     if is_blackwell():
@@ -1055,9 +1064,9 @@ def run_benchmark_internal(
             skip_max_running_requests_threshold = float("inf")
             skip_token_capacity_threshold = float("inf")
         else:
-            assert (
-                max_running_requests_per_dp > 0
-            ), f"effective_max_running_requests_per_dp is not set, {max_running_requests_per_dp=}"
+            assert max_running_requests_per_dp > 0, (
+                f"effective_max_running_requests_per_dp is not set, {max_running_requests_per_dp=}"
+            )
             skip_max_running_requests_threshold = max_running_requests_per_dp * dp_size
 
         print(f"{max_running_requests_per_dp=}")
@@ -1102,9 +1111,9 @@ def run_benchmark_internal(
             "--lora-request-distribution=distinct/skewed requires more than "
             "one adapter via --lora-name."
         )
-    assert (
-        bench_args.lora_zipf_alpha > 1
-    ), f"--lora-zipf-alpha must be > 1, got {bench_args.lora_zipf_alpha}"
+    assert bench_args.lora_zipf_alpha > 1, (
+        f"--lora-zipf-alpha must be > 1, got {bench_args.lora_zipf_alpha}"
+    )
 
     if bench_args.apply_chat_template and not bench_args.fixed_prompt_file:
         raise ValueError(
@@ -1150,6 +1159,7 @@ def run_benchmark_internal(
                 fixed_prompt_file=bench_args.fixed_prompt_file,
                 prompt_list_file=bench_args.prompt_list_file,
                 apply_chat_template=bench_args.apply_chat_template,
+                ignore_eos=bench_args.ignore_eos,
                 seed=bench_args.seed,
                 **gsp_kwargs,
             )
@@ -1197,6 +1207,7 @@ def run_benchmark_internal(
                     fixed_prompt_file=bench_args.fixed_prompt_file,
                     prompt_list_file=bench_args.prompt_list_file,
                     apply_chat_template=bench_args.apply_chat_template,
+                    ignore_eos=bench_args.ignore_eos,
                     seed=bench_args.seed,
                     **gsp_kwargs,
                 )

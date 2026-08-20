@@ -1,118 +1,152 @@
-# M1 paired-layout K sweep — build plan (desk, 2026-08-17)
+# M1 counterbalanced paired-layout K sweep
 
-Grounded in a live read of the M0/M0.5 code. **No code committed yet** — this is
-the build spec + the single integration seam M1 needs. M0.5 authorized exactly two
-workloads (`code_completion`, `structured_json`); everything else here reuses the
-existing, already-tested machinery.
+## Research question
 
-## Question (unchanged from README)
+> Does physical KV sharing move the optimal fixed speculative depth for an
+> acceptance-bearing shared-prefix workload?
 
-> Does physical KV sharing move the **optimal fixed K** for a workload that actually
-> accepts multi-draft speculation?
+M0 established that physical sharing changes target-verification cost. M0.5
+qualified two natural workloads with material multi-draft acceptance. M1 tests the
+interaction; it does not modify the adaptive controller.
 
-M0 answered "physical sharing changes verify-time" on a *non-accepting* synthetic
-workload (K=4 had 20 non-zero decisions / 73,708). M0.5 found two workloads that DO
-accept to full K=4 in every seed. M1 = M0's paired-layout timing machine driven by
-M0.5's real prompts, swept over K=0..5.
-
-## What already exists (reuse verbatim)
-
-| Piece | File | Role in M1 |
-|---|---|---|
-| `load_workloads` / `select_prompts` | `radix_kv_sharing_m05.py` | deterministic real prompts (shared prefix + seeded distinct queries) |
-| `Cell`, `build_cells` | `radix_kv_sharing_m0.py` | cell identity + matrix (parameterized: `DEFAULT_STEPS`) |
-| `run_cell` | `radix_kv_sharing_m0.py` | launches client, reads recorder, writes capture |
-| `analyze_capture_pairs` | `radix_kv_sharing_m0.py` | **the 5 hard controls — unchanged** |
-| observability recorder | `radix_kv_m0_observability.py` | `target_verify_gpu_time` / `kv_footprint` records |
-
-The analyzer's capture contract (verified): each capture needs
-`cell{batch_size,context_length,speculative_num_steps,seed,layout}`,
-`recorder{components:[one], records:[{batch_size, correct_drafts_per_req,
-logical_context_lengths, target_verify_gpu_ms}]}`, `input_fingerprints`,
-`client_seed`, `harness_git_head`, `server{...provenance...}`. `run_cell` already
-emits all of this — **only the prompt source differs for M1.**
-
-## The single integration seam
-
-`run_cell` drives `one_batch_server` with `--dataset-name generated-shared-prefix`
-(synthetic). `one_batch_server.dataset_name` choices are
-`{mmmu, random, random-ids, generated-shared-prefix}` — no real-workload path, and
-`fixed_prompt_file` is a *single* prompt (M1 needs `batch_size` distinct queries over
-one shared prefix). So M1 needs exactly one new prompt source that reuses
-`select_prompts`.
-
-**Chosen approach (minimal, keeps `run_cell`/analyzer untouched):** add a
-`workload-file` dataset to `one_batch_server` that, given `--workload-file` +
-`--workload-id` + `--seed` + `--batch-size`, calls the *same* `select_prompts`
-logic M0.5 used, tokenizes each rendered prompt, and reports `input_fingerprints`
-identically to the existing path. Then M1's runner is a thin wrapper over
-`build_cells` + `run_cell` with `dataset_name="workload-file"`.
-
-- Rejected alt: a bespoke M1 client posting to `/generate` (like M0.5's `_post_json`).
-  It would have to re-derive `input_fingerprints` + client_result shape that
-  `run_cell`/analyzer expect → more surface, more drift risk.
-- `select_prompts` is the shared truth for "same prompts as the M0.5 acceptance
-  screen," which is what makes M1's acceptance trajectory match M0.5 by construction.
-
-## M1 cell matrix
+## Provenance
 
 ```text
-workloads:  code_completion (primary), structured_json (secondary)   # M0.5-authorized only
-layouts:    shared, duplicated                                        # duplicated = --disable-radix-cache
-K:          0, 1, 2, 3, 4, 5
-batch size: 8            (M0.5 established acceptance at bs=8; hold constant for the K curve)
-context:    the workload's natural rendered length (not synthetic 8192/16384)
-seeds:      17, 29, 41
-temperature/output length: identical to M0.5 (0 / 128) across layouts
+base commit: 9472c72a8f7d1fa0ed5b49b49afcae6528872c7b
+branch: exp/radix-kv-sharing-m0
+workload source: benchmark/radix_kv_sharing_m0/m05_workloads.json
+prompt replay: one JSON prompt list per workload seed
+experiment revision: exact git HEAD is captured by run_m1.sh
 ```
-`instruction` = reserve; `short_qa` excluded (M0.5: never full K=4, 77–80 decisions).
-Two-pass as in M0: `target_verify_gpu_time` (timing) + `kv_footprint` (accounting,
-16-token pass) so the footprint hard control still applies.
 
-## Hard controls (inherited, no change)
+PR #31716 remains unchanged. The vLLM cost-model branch is outside this experiment.
 
-M1 reuses `analyze_capture_pairs` as-is. The five controls (prompt-SHA fingerprint
-match across layouts, verify-record count match, per-step `correct_drafts_per_req`
-match, per-step `logical_context_lengths` match, runtime-batch equality with
-symmetric-underfill exclusion) + footprint-reuse ordering all still gate the speedup.
-`m1_authorized`-style gating stays: **M1 emits a K-curve, it does not by itself
-authorize a controller or a feature PR** (README boundary).
+## Fixed matrix
+
+```text
+workloads: code_completion, structured_json
+layouts: shared, duplicated
+K: 0, 1, 2, 3, 4, 5
+batch size: 8
+seeds/query subsets: 17, 29, 41
+temperature: 0
+output length: 128
+ignore_eos: false
+```
+
+Each timing order therefore requires exactly 72 unique cells:
+
+```text
+2 workloads × 2 layouts × 6 K × 3 seeds = 72
+```
+
+The footprint pass requires the same 72 logical cells. A missing, duplicate, or
+unexpected cell produces `M1_INCOMPLETE` before K* is computed.
+
+## Timing definition
+
+The timing process uses:
+
+```text
+SGLANG_RADIX_KV_M0_RECORD=spec_cycle_gpu_time
+```
+
+The primary per-cycle metric is:
+
+```text
+useful_tokens_per_spec_cycle_ms
+  = (1 + mean accepted drafts per request)
+    / (draft_gpu_ms + target_verify_gpu_ms)
+```
+
+K=0 records `draft_gpu_ms=0`. The recorder also retains `spec_cycle_gpu_ms`,
+`draft_extend_gpu_ms`, and unattributed cycle time. Full-cycle efficiency is a
+sensitivity result, not the primary K* definition.
+
+Physical footprint is collected in separate server processes. Timing and footprint
+collection must never be enabled together.
+
+## Pair validity
+
+For every `(workload, K, seed)` and execution order, the shared and duplicated arms
+must have:
+
+1. identical tokenized prompt fingerprints;
+2. identical client seed and server provenance;
+3. equal retained record counts;
+4. exact per-step acceptance trajectories;
+5. exact logical-context trajectories;
+6. symmetric runtime batch sizes, with only symmetric underfilled tails excluded;
+7. higher physical page reuse in the shared footprint arm.
+
+Any failure produces `M1_INVALID` and suppresses the K* conclusion.
+
+## Counterbalancing
+
+`run_m1.sh` automates both K and layout order:
+
+```text
+forward: ascending K, shared -> duplicated
+reverse: descending K, duplicated -> shared
+footprint: ascending K, shared -> duplicated
+```
+
+Per-cell efficiency is the median of the forward and reverse measurements. The
+runner records GPU telemetry, server logs, exact git revision, execution order, and
+raw captures.
+
+One-cell smoke:
+
+```bash
+M1_SMOKE_ONLY=1 \
+RESULT_ROOT=results/radix-kv-sharing-m1-smoke \
+benchmark/radix_kv_sharing_m0/run_m1.sh
+```
+
+Full run:
+
+```bash
+RESULT_ROOT=results/radix-kv-sharing-m1 \
+benchmark/radix_kv_sharing_m0/run_m1.sh
+```
 
 ## Decision rule
 
-M1 answers "does K\* (argmax useful-progress-per-verify-time) differ between shared
-and duplicated?" Output = per-(workload, layout) curve of verify-time vs K and the
-implied K\*. A *shift* in K\* between layouts (reproduced across all 3 seeds, past the
-measurement floor, all hard controls green) is the only thing that would motivate the
-next milestone. No shift / below floor / not reproduced → stop, record, do not build
-the controller.
+K* is computed independently for each seed and from the across-seed aggregate.
+When shared and duplicated K* differ, both layouts must prefer their own K* over the
+other layout's K* by at least `minimum_effect_percent`. At least two of three seeds
+must reproduce the aggregate shift direction.
 
-## Build checklist (desk, then one rental)
+```text
+M1_INCOMPLETE
+  required cells are missing, duplicated, or unexpected
 
-1. **Desk — DONE (2026-08-17):** implemented.
-   - `one_batch_server`: generic `--prompt-list-file` (JSON list of exactly
-     `batch_size` prompt strings, tokenized as-is). Decoupled — no experiment import.
-   - `radix_kv_sharing_m0.run_cell`: optional `prompt_list_file` param; when set the
-     client command replaces the gsp dataset args with `--prompt-list-file`.
-     Backward-compatible (default `""` preserves M0 behavior; M0 tests untouched).
-   - `radix_kv_sharing_m1.py`: `build_m1_cells` (K0..5 × layouts × seeds, bs=8),
-     `write_plan` (rejects non-authorized workloads, renders one prompt-list per seed
-     via `select_prompts`), `run_matching_m1_cells` (selects by server layout/K, replays
-     the seed's prompt-list through `run_cell`), `summarize_k_curve` (per-layout
-     `useful_progress/verify_ms` → K\* + shift flag), `analyze_m1` (reuses
-     `analyze_capture_pairs` hard controls + the K\* curve). CLI `plan/run-matching/analyze`.
-   - Tests: `test/registered/unit/spec/test_radix_kv_sharing_m1.py` — cell-matrix
-     completeness, unauthorized-workload rejection, K\*-shift derivation (+ no-shift
-     negative), prompt-list wiring. `py_compile` clean; `summarize_k_curve` logic
-     verified standalone. **Full pytest needs the SGLang env (Linux) — unrun locally.**
-2. **Style:** new containers = `msgspec.Struct` (repo rule `no-dataclasses`), kw-only
-   args, small functions. Do **not** touch `python/sglang/srt/speculative/*` (would
-   trigger the `speculative-naming` skill) — M1 is benchmark-only.
-3. **Rental (user go):** single H100 NVL, ~$1 (M0.5 was $0.72 / 17 min). Smoke one
-   cell first (shared vs duplicated footprints distinct + hard controls pass), then
-   the full 2×6×2×3 timing matrix + footprint pass. Teardown, archive with SHA-256.
+M1_INVALID
+  paired prompt, acceptance, context, provenance, batch, or footprint control fails
 
-## Custody / provenance
+M1_NO_INTERACTION
+  aggregate shared and duplicated K* are equal
 
-Branch `exp/radix-kv-sharing-m0` (`9472c72a`). PR #31716 SHA untouched. Controller
-and upstream PR remain blocked until M1 shows a real K\* shift.
+M1_K_STAR_SHIFT_UNPOWERED
+  argmax differs but the effect floor or 2/3-seed reproduction is not met
+
+M1_K_STAR_SHIFT
+  aggregate shift, bidirectional effect floor, and seed reproduction all pass
+```
+
+The analyzer additionally reports:
+
+```text
+Delta_sharing(K) = efficiency_shared(K) / efficiency_duplicated(K) - 1
+```
+
+Only `M1_K_STAR_SHIFT` permits evaluation of incremental oracle value beyond the
+existing BS × context policy. It still does not directly authorize a controller or
+an upstream PR.
+
+## Current state
+
+Desk implementation has not been pushed or run on a GPU. The runner refuses a dirty
+worktree so every artifact resolves to the recorded experiment commit. Before rental:
+run static checks and unit tests, commit locally, then audit this contract against the
+exact commit.

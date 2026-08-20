@@ -163,8 +163,11 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         else:
             ctx = empty_context()
         with (
-            ctx
-        ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context(), draft_model_build_scope():
+            ctx,
+            speculative_moe_backend_context(),
+            speculative_moe_a2a_backend_context(),
+            draft_model_build_scope(),
+        ):
             self.draft_worker = TpModelWorker(
                 server_args=server_args,
                 gpu_id=gpu_id,
@@ -948,9 +951,7 @@ class EagleDraftWorker(EagleDraftWorkerBase):
         dsa_seed_topk_indices = None
         if self.seed_dsa_topk_from_draft_extend:
             if can_run_decode_cuda_graph:
-                dsa_extend_topk_capture = (
-                    self.cuda_graph_runner_for_draft_extend.buffers.dsa_seed_topk_capture
-                )
+                dsa_extend_topk_capture = self.cuda_graph_runner_for_draft_extend.buffers.dsa_seed_topk_capture
             else:
                 dsa_extend_topk_capture = forward_batch.spec_info.dsa_seed_topk_capture
             # Fancy indexing returns a fresh tensor (detached from the buffer).
@@ -1174,49 +1175,55 @@ class EAGLEWorkerV2(BaseSpecWorker):
                     capture_hidden_mode=capture_mode,
                     vocab_size=self.target_worker.model_config.vocab_size,
                 )
-            if self.speculative_num_steps == 0:
-                # Drafting disabled (high batch size). _draft_extend below still
-                # runs, keeping draft KV warm for when the batch shrinks.
-                verify_input = self._build_trivial_verify_input(batch)
-            else:
-                with (
-                    self.draft_worker.draft_tp_context(
-                        self.draft_worker.draft_runner.tp_group
-                    ),
-                    speculative_moe_backend_context(),
-                    speculative_moe_a2a_backend_context(),
-                    spec_stage_span("draft"),
-                ):
-                    verify_input: EagleVerifyInput = self.draft_worker.draft(batch)
-            assert verify_input.is_verify_input()
-            batch.spec_info = verify_input
-            with (
-                self.radix_kv_m0_recorder.target_verify(
-                    batch=batch,
-                    req_to_token_pool=self.req_to_token_pool,
-                    speculative_num_steps=self.speculative_num_steps,
-                ),
-                spec_stage_span("target_verify"),
+            with self.radix_kv_m0_recorder.spec_cycle(
+                batch=batch,
+                speculative_num_steps=self.speculative_num_steps,
             ):
-                batch_output = self.verify(batch, grammar_barrier=grammar_barrier)
-            # Publish before draft_extend so the fence is at verify-end.
-            if on_publish is not None:
-                on_publish(batch_output.new_seq_lens)
-            if (
-                self.speculative_num_steps == 0
-                and envs.SGLANG_SPEC_SKIP_ZERO_STEP_DRAFT_EXTEND.get()
-            ):
-                self._stub_skipped_draft_extend(batch, batch_output)
-            else:
+                if self.speculative_num_steps == 0:
+                    # Drafting disabled (high batch size). _draft_extend below still
+                    # runs, keeping draft KV warm for when the batch shrinks.
+                    verify_input = self._build_trivial_verify_input(batch)
+                else:
+                    with (
+                        self.radix_kv_m0_recorder.draft_stage(),
+                        self.draft_worker.draft_tp_context(
+                            self.draft_worker.draft_runner.tp_group
+                        ),
+                        speculative_moe_backend_context(),
+                        speculative_moe_a2a_backend_context(),
+                        spec_stage_span("draft"),
+                    ):
+                        verify_input: EagleVerifyInput = self.draft_worker.draft(batch)
+                assert verify_input.is_verify_input()
+                batch.spec_info = verify_input
                 with (
-                    self.draft_worker.draft_tp_context(
-                        self.draft_worker.draft_runner.tp_group
+                    self.radix_kv_m0_recorder.target_verify(
+                        batch=batch,
+                        req_to_token_pool=self.req_to_token_pool,
+                        speculative_num_steps=self.speculative_num_steps,
                     ),
-                    speculative_moe_backend_context(),
-                    speculative_moe_a2a_backend_context(),
-                    spec_stage_span("draft_extend"),
+                    spec_stage_span("target_verify"),
                 ):
-                    self.draft_worker._draft_extend_for_decode(batch, batch_output)
+                    batch_output = self.verify(batch, grammar_barrier=grammar_barrier)
+                # Publish before draft_extend so the fence is at verify-end.
+                if on_publish is not None:
+                    on_publish(batch_output.new_seq_lens)
+                if (
+                    self.speculative_num_steps == 0
+                    and envs.SGLANG_SPEC_SKIP_ZERO_STEP_DRAFT_EXTEND.get()
+                ):
+                    self._stub_skipped_draft_extend(batch, batch_output)
+                else:
+                    with (
+                        self.radix_kv_m0_recorder.draft_extend_stage(),
+                        self.draft_worker.draft_tp_context(
+                            self.draft_worker.draft_runner.tp_group
+                        ),
+                        speculative_moe_backend_context(),
+                        speculative_moe_a2a_backend_context(),
+                        spec_stage_span("draft_extend"),
+                    ):
+                        self.draft_worker._draft_extend_for_decode(batch, batch_output)
 
             return batch_output
 

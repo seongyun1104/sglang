@@ -153,6 +153,7 @@ def run_cell(
     local_tokenizer_path: str = "",
     output_length_override: int | None = None,
     prompt_list_file: str = "",
+    respect_eos: bool = False,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     server_info_url = base_url.rstrip("/") + "/server_info"
@@ -215,6 +216,8 @@ def run_cell(
         str(result_path),
         "--no-append-to-github-summary",
     ]
+    if respect_eos:
+        command.append("--respect-eos")
     if local_tokenizer_path:
         command.extend(["--local-tokenizer-path", local_tokenizer_path])
     subprocess.run(command, check=True)
@@ -291,7 +294,13 @@ def analyze_capture_pairs(
     discard_first: int = 5,
     footprint_discard_first: int = 1,
     require_footprint: bool = True,
+    timing_component: str = "target_verify_gpu_time",
+    timing_fields: Sequence[str] = ("target_verify_gpu_ms",),
 ) -> list[dict[str, Any]]:
+    if not timing_component:
+        raise ValueError("timing_component must be non-empty")
+    if not timing_fields:
+        raise ValueError("timing_fields must be non-empty")
     grouped: dict[tuple[int, int, int, int], dict[str, dict[str, dict[str, Any]]]] = {}
     for capture in captures:
         cell = capture["cell"]
@@ -320,7 +329,7 @@ def analyze_capture_pairs(
         if set(arms) != set(DEFAULT_LAYOUTS):
             continue
         timing_arms = {
-            layout: captures_by_component.get("target_verify_gpu_time")
+            layout: captures_by_component.get(timing_component)
             for layout, captures_by_component in arms.items()
         }
         if any(capture is None for capture in timing_arms.values()):
@@ -408,17 +417,13 @@ def analyze_capture_pairs(
                 "logical_context_lengths"
             ):
                 context_matches += 1
-            if (
-                "target_verify_gpu_ms" in shared
-                and "target_verify_gpu_ms" in duplicated
-            ):
-                baseline = float(duplicated["target_verify_gpu_ms"])
+            if all(field in shared and field in duplicated for field in timing_fields):
+                shared_time = sum(float(shared[field]) for field in timing_fields)
+                baseline = sum(float(duplicated[field]) for field in timing_fields)
                 if baseline > 0:
-                    timing_speedups.append(
-                        (baseline - float(shared["target_verify_gpu_ms"]))
-                        / baseline
-                        * 100.0
-                    )
+                    timing_speedups.append((baseline - shared_time) / baseline * 100.0)
+            else:
+                invalid_reasons.append("timing_field_missing")
         if acceptance_matches != pair_count:
             invalid_reasons.append("acceptance_trajectory_mismatch")
         if context_matches != pair_count:
@@ -496,6 +501,8 @@ def analyze_capture_pairs(
                 "context_length": context_length,
                 "speculative_num_steps": steps,
                 "seed": seed,
+                "timing_component": timing_component,
+                "timing_fields": "+".join(timing_fields),
                 "paired_records": pair_count,
                 "timing_underfilled_pairs_excluded": timing_underfilled_pairs_excluded,
                 "footprint_underfilled_pairs_excluded": (
@@ -643,9 +650,9 @@ def analyze_counterbalanced_confirmation(
         controls_valid = bool(forward_row["controls_valid"]) and bool(
             reverse_row["controls_valid"]
         )
-        same_direction = (
-            forward_effect > 0 and reverse_effect > 0
-        ) or (forward_effect < 0 and reverse_effect < 0)
+        same_direction = (forward_effect > 0 and reverse_effect > 0) or (
+            forward_effect < 0 and reverse_effect < 0
+        )
         both_above_resolution = (
             abs(forward_effect) >= minimum_effect_percent
             and abs(reverse_effect) >= minimum_effect_percent
