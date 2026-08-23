@@ -42,6 +42,16 @@ def test_page_tables_isolate_aliasing_and_scattering():
     assert scattered_stats["adjacent_step_ratio"] == 0
 
 
+def test_default_shape_tracks_qwen38_full_attention():
+    config = I0Config()
+    assert config.model_id == "Qwen/Qwen3.8-27B"
+    assert (config.num_query_heads, config.num_kv_heads, config.head_dim) == (
+        24,
+        4,
+        256,
+    )
+
+
 def test_all_six_orders_balance_every_layout_and_position():
     assert len(BALANCED_ORDERS) == 6
     assert len(set(BALANCED_ORDERS)) == 6

@@ -2,11 +2,15 @@
 set -euo pipefail
 
 RESULT_ROOT="${RESULT_ROOT:-results/fa3-kv-aliasing-i0}"
+I0_MODEL_ID="${I0_MODEL_ID:-Qwen/Qwen3.8-27B}"
 I0_BATCH_SIZE="${I0_BATCH_SIZE:-16}"
 I0_CONTEXT_LENGTH="${I0_CONTEXT_LENGTH:-16384}"
 I0_QUERY_LENGTH="${I0_QUERY_LENGTH:-1}"
 I0_SHARED_PREFIX_RATIO="${I0_SHARED_PREFIX_RATIO:-0.9}"
 I0_PAGE_SIZE="${I0_PAGE_SIZE:-1}"
+I0_NUM_QUERY_HEADS="${I0_NUM_QUERY_HEADS:-24}"
+I0_NUM_KV_HEADS="${I0_NUM_KV_HEADS:-4}"
+I0_HEAD_DIM="${I0_HEAD_DIM:-256}"
 I0_SEEDS="${I0_SEEDS:-17 29 41}"
 I0_REPETITIONS="${I0_REPETITIONS:-50}"
 I0_WARMUP="${I0_WARMUP:-10}"
@@ -33,11 +37,15 @@ python -c 'import json, torch; print(json.dumps({"torch": torch.__version__, "cu
 
 python -m sglang.benchmark.fa3_kv_aliasing_i0 run \
   --output-dir "${RESULT_ROOT}" \
+  --model-id "${I0_MODEL_ID}" \
   --batch-size "${I0_BATCH_SIZE}" \
   --context-length "${I0_CONTEXT_LENGTH}" \
   --query-length "${I0_QUERY_LENGTH}" \
   --shared-prefix-ratio "${I0_SHARED_PREFIX_RATIO}" \
   --page-size "${I0_PAGE_SIZE}" \
+  --num-query-heads "${I0_NUM_QUERY_HEADS}" \
+  --num-kv-heads "${I0_NUM_KV_HEADS}" \
+  --head-dim "${I0_HEAD_DIM}" \
   --seeds ${I0_SEEDS} \
   --repetitions "${I0_REPETITIONS}" \
   --warmup "${I0_WARMUP}" \

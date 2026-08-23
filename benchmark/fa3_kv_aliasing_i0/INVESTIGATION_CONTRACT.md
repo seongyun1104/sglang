@@ -21,19 +21,21 @@ scheduler, allocator, and Radix-tree orchestration layers.
 
 ## Fixed anchor
 
-The first run uses the strongest and simplest confirmed M0 corner:
+The first run preserves the strongest and simplest confirmed M0 workload corner
+while adopting the latest official Qwen dense checkpoint's full-attention shape:
 
 ```text
 GPU: H100
+model-shape provenance: Qwen/Qwen3.8-27B
 attention: SGLang FA3 paged KV
 batch size: 16
 logical KV length: 16,384 tokens
 query length: 1 token
 shared-prefix fraction: 90%
 dtype: BF16
-query heads: 32
-KV heads: 8
-head dimension: 128
+query heads: 24
+KV heads: 4
+head dimension: 256
 page size: 1
 causal: true
 num_splits: 0
@@ -42,6 +44,10 @@ CUDA graph: disabled
 
 The query length of one corresponds to the K=0 anchor. Speculative acceptance,
 draft execution, and controller behavior are intentionally absent.
+
+Qwen3.8-27B uses a hybrid stack with three Gated DeltaNet layers followed by one
+full-attention layer. I0 covers only the full-attention FA3 path. It does not load
+model weights and makes no whole-model latency claim.
 
 ## A/B/C layouts
 

@@ -3,6 +3,9 @@
 This directory contains a minimal H100 mechanism-localization experiment for the
 physical-KV-sharing latency signal observed by the Radix M0 study.
 
+The default shape is the full-attention component of `Qwen/Qwen3.8-27B`. Model
+weights are not downloaded; the checkpoint is provenance for the Q/KV head geometry.
+
 Read `INVESTIGATION_CONTRACT.md` before running anything. The first milestone is
 latency reproduction across three page layouts. It does not run Nsight, implement
 an optimization, or change speculative-depth selection.

@@ -35,14 +35,15 @@ OUTPUT_ATOL = 2e-2
 
 @dataclass(frozen=True)
 class I0Config:
+    model_id: str = "Qwen/Qwen3.8-27B"
     batch_size: int = 16
     context_length: int = 16384
     query_length: int = 1
     shared_prefix_ratio: float = 0.9
     page_size: int = 1
-    num_query_heads: int = 32
-    num_kv_heads: int = 8
-    head_dim: int = 128
+    num_query_heads: int = 24
+    num_kv_heads: int = 4
+    head_dim: int = 256
     dtype: str = "bfloat16"
     causal: bool = True
     num_splits: int = 0
@@ -763,11 +764,15 @@ def run_i0(
 
 def _config_from_args(args: argparse.Namespace) -> I0Config:
     return I0Config(
+        model_id=args.model_id,
         batch_size=args.batch_size,
         context_length=args.context_length,
         query_length=args.query_length,
         shared_prefix_ratio=args.shared_prefix_ratio,
         page_size=args.page_size,
+        num_query_heads=args.num_query_heads,
+        num_kv_heads=args.num_kv_heads,
+        head_dim=args.head_dim,
         repetitions=args.repetitions,
         warmup=args.warmup,
         l2_thrash_mib=args.l2_thrash_mib,
@@ -776,11 +781,15 @@ def _config_from_args(args: argparse.Namespace) -> I0Config:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model-id", default="Qwen/Qwen3.8-27B")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--context-length", type=int, default=16384)
     parser.add_argument("--query-length", type=int, default=1)
     parser.add_argument("--shared-prefix-ratio", type=float, default=0.9)
     parser.add_argument("--page-size", type=int, default=1)
+    parser.add_argument("--num-query-heads", type=int, default=24)
+    parser.add_argument("--num-kv-heads", type=int, default=4)
+    parser.add_argument("--head-dim", type=int, default=256)
     parser.add_argument("--seeds", type=int, nargs="+", default=[17, 29, 41])
     parser.add_argument("--repetitions", type=int, default=50)
     parser.add_argument("--warmup", type=int, default=10)
