@@ -121,6 +121,7 @@ cache states: cold-ish, warm steady-state
 warmup: excluded
 primary timer: synchronized CUDA events around one FA3 call
 raw samples: retained
+GPU clocks, temperature, power, utilization: sampled every 500 ms
 ```
 
 `cold-ish` means a preregistered buffer larger than H100 L2 is touched and

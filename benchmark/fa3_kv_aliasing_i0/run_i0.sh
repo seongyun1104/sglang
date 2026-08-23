@@ -31,9 +31,23 @@ mkdir -p "${RESULT_ROOT}/metadata"
 touch "${RESULT_ROOT}/i0-started"
 
 git rev-parse HEAD >"${RESULT_ROOT}/metadata/git-head.txt"
+date -u +%Y-%m-%dT%H:%M:%SZ >"${RESULT_ROOT}/metadata/started-at-utc.txt"
 nvidia-smi -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
 python -c 'import json, torch; print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda, "gpu": torch.cuda.get_device_name()}))' \
   >"${RESULT_ROOT}/metadata/runtime.json"
+
+nvidia-smi \
+  --query-gpu=timestamp,name,pstate,clocks.sm,clocks.mem,temperature.gpu,power.draw,utilization.gpu,memory.used \
+  --format=csv \
+  --loop-ms=500 \
+  --filename="${RESULT_ROOT}/metadata/gpu-telemetry.csv" &
+TELEMETRY_PID=$!
+
+stop_telemetry() {
+  kill "${TELEMETRY_PID}" 2>/dev/null || true
+  wait "${TELEMETRY_PID}" 2>/dev/null || true
+}
+trap stop_telemetry EXIT
 
 python -m sglang.benchmark.fa3_kv_aliasing_i0 run \
   --output-dir "${RESULT_ROOT}" \
@@ -52,4 +66,7 @@ python -m sglang.benchmark.fa3_kv_aliasing_i0 run \
   --l2-thrash-mib "${I0_L2_THRASH_MIB}" \
   --minimum-effect-percent "${I0_MINIMUM_EFFECT_PERCENT}"
 
+stop_telemetry
+trap - EXIT
+date -u +%Y-%m-%dT%H:%M:%SZ >"${RESULT_ROOT}/metadata/completed-at-utc.txt"
 touch "${RESULT_ROOT}/i0-complete"
