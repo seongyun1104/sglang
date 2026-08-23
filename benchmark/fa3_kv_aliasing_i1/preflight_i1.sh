@@ -16,17 +16,18 @@ reset_clock() {
 }
 trap reset_clock EXIT
 
+failed=0
 if ! ncu --query-metrics >"${RESULT_ROOT}/ncu-query-metrics.txt" 2>&1; then
   touch "${RESULT_ROOT}/PRECHECK_COUNTER_QUERY_FAILED"
-  exit 10
+  failed=1
 fi
 if ! nvidia-smi -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" \
   >"${RESULT_ROOT}/clock-lock.txt" 2>&1; then
   touch "${RESULT_ROOT}/PRECHECK_CLOCK_LOCK_FAILED"
-  exit 11
+  failed=1
 fi
 
-ncu \
+if ! ncu \
   --profile-from-start off \
   --target-processes all \
   --set basic \
@@ -34,9 +35,20 @@ ncu \
   --force-overwrite \
   --log-file "${RESULT_ROOT}/counter-preflight.log" \
   python -m sglang.benchmark.fa3_kv_aliasing_i1 counter-preflight \
-  --output "${RESULT_ROOT}/counter-preflight.json"
+  --output "${RESULT_ROOT}/counter-preflight.json"; then
+  touch "${RESULT_ROOT}/PRECHECK_COUNTER_CAPTURE_FAILED"
+  failed=1
+fi
 
-test -s "${RESULT_ROOT}/counter-preflight.ncu-rep"
+if [[ ! -s "${RESULT_ROOT}/counter-preflight.ncu-rep" ]]; then
+  touch "${RESULT_ROOT}/PRECHECK_COUNTER_REPORT_MISSING"
+  failed=1
+fi
+
+if (( failed )); then
+  touch "${RESULT_ROOT}/PRECHECK_FAILED"
+  exit 12
+fi
 touch "${RESULT_ROOT}/PRECHECK_PASS"
 reset_clock
 trap - EXIT
