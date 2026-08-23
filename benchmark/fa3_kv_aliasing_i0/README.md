@@ -10,6 +10,11 @@ Read `INVESTIGATION_CONTRACT.md` before running anything. The first milestone is
 latency reproduction across three page layouts. It does not run Nsight, implement
 an optimization, or change speculative-depth selection.
 
+The 2026-08-23 H100 NVL run is documented in `I0_RESULT_20260823.md`. Gate A
+localized a reproducible, dose-dependent latency reduction to physical KV-page
+aliasing. The exact HBM/L2 mechanism remains unresolved because the rental host
+denied GPU performance-counter access. No optimization or feature PR is authorized.
+
 ```bash
 RESULT_ROOT=results/fa3-kv-aliasing-i0 \
 benchmark/fa3_kv_aliasing_i0/run_i0.sh
