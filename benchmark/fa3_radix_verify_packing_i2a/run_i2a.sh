@@ -3,6 +3,7 @@ set -euo pipefail
 
 RESULT_ROOT="${RESULT_ROOT:-/tmp/sglang-fa3-radix-verify-packing-i2a}"
 PREFLIGHT_ROOT="${PREFLIGHT_ROOT:-/tmp/sglang-fa3-kv-aliasing-i1-preflight}"
+: "${I1_GATE_B_REVIEW_RECEIPT:?Set I1_GATE_B_REVIEW_RECEIPT after reviewing I1 Gate B}"
 : "${I2A_SM_CLOCK_MHZ:?Set I2A_SM_CLOCK_MHZ to the preflighted fixed SM clock}"
 I2A_CONTEXTS="${I2A_CONTEXTS:-8192 16384}"
 I2A_SPECULATIVE_STEPS="${I2A_SPECULATIVE_STEPS:-1 2 4}"
@@ -12,6 +13,17 @@ I2A_WARMUP="${I2A_WARMUP:-10}"
 
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   echo "Refusing to run I2a from a dirty worktree." >&2
+  exit 2
+fi
+if [[ ! -s "${I1_GATE_B_REVIEW_RECEIPT}" ]] || \
+  ! grep -Fxq "I1_GATE_B_REVIEWED" "${I1_GATE_B_REVIEW_RECEIPT}"; then
+  echo "I2a requires an explicit I1 Gate B review receipt." >&2
+  exit 2
+fi
+experiment_commit="$(git rev-parse HEAD)"
+if ! grep -Fxq "experiment_commit=${experiment_commit}" \
+  "${I1_GATE_B_REVIEW_RECEIPT}"; then
+  echo "I1 Gate B review receipt does not match the current experiment commit." >&2
   exit 2
 fi
 if [[ ! -f "${PREFLIGHT_ROOT}/PRECHECK_PASS" ]]; then

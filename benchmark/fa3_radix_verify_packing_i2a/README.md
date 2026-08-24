@@ -13,8 +13,10 @@ runtime metadata, and GPU telemetry:
 ```bash
 I2A_SM_CLOCK_MHZ=1410 \
 PREFLIGHT_ROOT=/workspace/i1/preflight \
+I1_GATE_B_REVIEW_RECEIPT=/workspace/i1/hbm/GATE_B_REVIEW_RECEIPT \
 RESULT_ROOT=/workspace/i2a/results \
 benchmark/fa3_radix_verify_packing_i2a/run_i2a.sh
 ```
 
-Do not interpret a CPU plan or reduced smoke as hardware evidence.
+The review receipt must contain `I1_GATE_B_REVIEWED` and the current experiment
+commit. Do not interpret a CPU plan or reduced smoke as hardware evidence.

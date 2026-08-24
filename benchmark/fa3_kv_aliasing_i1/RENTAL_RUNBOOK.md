@@ -59,6 +59,20 @@ I1 Gate C only if Gate B requires it
 I2a only after the I1 environment remains valid
 ```
 
+After inspecting both profile-pair validations and the captured HBM counters,
+write a review receipt bound to the exact experiment commit:
+
+```bash
+I1_GATE_B_REVIEW_RECEIPT=/workspace/radix-i1/i1-hbm/GATE_B_REVIEW_RECEIPT
+{
+  echo I1_GATE_B_REVIEWED
+  echo "experiment_commit=$(git rev-parse HEAD)"
+} >"${I1_GATE_B_REVIEW_RECEIPT}"
+```
+
+Creating this receipt is a deliberate human review action, not part of the I1
+runner. I2a fails closed if the receipt is absent or names another commit.
+
 Commands:
 
 ```bash
@@ -69,6 +83,7 @@ benchmark/fa3_kv_aliasing_i1/run_i1_hbm.sh
 
 I2A_SM_CLOCK_MHZ=<same-clock> \
 PREFLIGHT_ROOT=/workspace/radix-i1/preflight \
+I1_GATE_B_REVIEW_RECEIPT=/workspace/radix-i1/i1-hbm/GATE_B_REVIEW_RECEIPT \
 RESULT_ROOT=/workspace/radix-i1/i2a \
 benchmark/fa3_radix_verify_packing_i2a/run_i2a.sh
 ```
