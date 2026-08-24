@@ -29,6 +29,7 @@ request_group_ids = _MODULE.request_group_ids
 row_permutations = _MODULE.row_permutations
 shared_pages = _MODULE.shared_pages
 verify_width = _MODULE.verify_width
+validate_axes = _MODULE.validate_axes
 
 
 def test_target_verify_width_matches_topk1_eagle_chain():
@@ -93,11 +94,39 @@ def test_plan_records_same_page_table_and_real_verify_width():
     )
     assert plan["cells"]["ctx64-k1"]["target_verify_width"] == 2
     assert plan["cells"]["ctx64-k4"]["target_verify_width"] == 5
+    assert plan["expected_samples"] == 72
+    assert plan["expected_output_checks"] == 4
     assert plan["semantic_contract"]["candidate_kv_present_in_cache"] is True
     assert plan["cells"]["ctx64-k4"]["target_kv_length"] == 64 + verify_width(4)
     stats = plan["cells"]["ctx64-k4"]["canonical_page_table"]
     assert stats["physical_page_references"] == 8 * (64 + verify_width(4))
     assert stats["page_reuse_ratio"] > 0
+
+
+def test_axes_reject_duplicates_and_hardware_run_requires_anchor():
+    try:
+        validate_axes(
+            contexts=[8192, 8192],
+            speculative_steps=[1, 2, 4],
+            seeds=[17, 29, 41],
+            require_primary_anchor=False,
+        )
+    except ValueError as error:
+        assert "contexts must be unique" in str(error)
+    else:
+        raise AssertionError("duplicate contexts must fail before GPU execution")
+
+    try:
+        validate_axes(
+            contexts=[8192],
+            speculative_steps=[1, 2],
+            seeds=[17, 29, 41],
+            require_primary_anchor=True,
+        )
+    except ValueError as error:
+        assert "16K/K=4 anchor" in str(error)
+    else:
+        raise AssertionError("hardware run without the primary anchor must fail")
 
 
 def _rows(config: I2AConfig, *, clustered: float, interleaved: float, random: float):
@@ -144,7 +173,33 @@ def test_analyzer_requires_effect_and_stratum_support():
     )
     assert positive["i2a_status"] == "I2A_ROW_ORDER_SIGNAL"
     assert positive["primary_anchor"]["supporting_strata"] == 18
+    assert positive["primary_anchor"]["same_arm_p95_noise_percent"] == 0.0
+    assert positive["primary_anchor"]["resolved_effect_floor_percent"] == 2.0
     assert null["i2a_status"] == "I2A_NO_ROW_ORDER_SIGNAL"
+
+
+def test_analyzer_marks_provider_noise_above_effect_as_unpowered():
+    config = I2AConfig(repetitions=2, minimum_effect_percent=2.0)
+    rows = _rows(config, clustered=9.7, interleaved=10.0, random=10.0)
+    drift = (0.90, 0.94, 0.98, 1.02, 1.06, 1.10)
+    for row in rows:
+        row["latency_ms"] *= drift[int(row["order_index"])]
+
+    result = analyze_rows(
+        rows,
+        config=config,
+        contexts=[16384],
+        speculative_steps=[4],
+        seeds=[17, 29, 41],
+        outputs_valid=True,
+    )
+
+    assert result["i2a_status"] == "I2A_UNPOWERED"
+    anchor = result["primary_anchor"]
+    assert anchor["same_arm_p95_noise_percent"] > 2.0
+    assert (
+        anchor["resolved_effect_floor_percent"] == anchor["same_arm_p95_noise_percent"]
+    )
 
 
 def test_analyzer_fails_closed_on_missing_or_invalid_output():

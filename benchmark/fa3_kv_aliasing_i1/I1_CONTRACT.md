@@ -24,17 +24,22 @@ nvidia-smi application-clock lock succeeds
 ```
 
 Any failure means immediate teardown. Container root without host counter access is
-not sufficient. No anchor measurement is allowed after a failed preflight.
+not sufficient. Exactly one H100 must be visible. The preflight records its UUID,
+the requested clock, and the exact HBM counter set; paid runners reject a different
+GPU, clock, or counter set. No anchor measurement is allowed after a failed
+preflight.
 
 ## Sequence
 
 ```text
 1. fixed-clock A/B latency reproduction using the I0 counterbalanced harness
-2. untimed A and B output-digest equality
-3. Gate B NCU capture: DRAM read bytes/sectors and throughput
-4. analyze Gate B
-5. only then Gate C: L2 requested sectors, hits/misses, throughput
-6. stalls only if DRAM/L2 do not explain latency
+2. fail closed unless the I0 status, effect floor, stratum support, output, sample,
+   and exact anchor-shape gates all pass
+3. untimed A and B output-digest equality
+4. Gate B NCU capture: DRAM read bytes/sectors and throughput
+5. analyze Gate B
+6. only then Gate C: L2 requested sectors, hits/misses, throughput
+7. stalls only if DRAM/L2 do not explain latency
 ```
 
 The NCU A and B captures use separate processes with the same seed, tensor shapes,

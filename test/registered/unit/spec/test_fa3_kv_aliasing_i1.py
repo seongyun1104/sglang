@@ -55,3 +55,45 @@ def test_pair_validation_fails_on_digest_or_role_mismatch(tmp_path):
     assert result["valid"] is False
     assert result["output_sha256_equal"] is False
     assert "layout_roles" in result["metadata_differences"]
+
+
+def _latency_summary():
+    return {
+        "i0_status": "I0_ALIASING_CANDIDATE",
+        "outputs_valid": True,
+        "expected_samples": 3240,
+        "observed_samples": 3240,
+        "minimum_effect_percent": 2.0,
+        "warm_alias_speedup_percent": 13.0,
+        "required_stratum_support": 12,
+        "alias_supporting_strata": 16,
+        "config": dict(_MODULE.I1_ANCHOR_CONFIG),
+    }
+
+
+def test_latency_gate_requires_complete_supported_anchor(tmp_path):
+    summary_path = tmp_path / "i0-summary.json"
+    output = tmp_path / "gate.json"
+    summary_path.write_text(json.dumps(_latency_summary()))
+
+    result = _MODULE.validate_latency_gate(summary_path, output)
+
+    assert result["valid"] is True
+    assert result["config_mismatches"] == {}
+    assert json.loads(output.read_text()) == result
+
+
+def test_latency_gate_fails_closed_on_null_or_shape_mismatch(tmp_path):
+    summary = _latency_summary()
+    summary["i0_status"] = "I0_NO_ISOLATED_SIGNAL"
+    summary["warm_alias_speedup_percent"] = 0.5
+    summary["config"]["context_length"] = 8192
+    summary_path = tmp_path / "i0-summary.json"
+    output = tmp_path / "gate.json"
+    summary_path.write_text(json.dumps(summary))
+
+    result = _MODULE.validate_latency_gate(summary_path, output)
+
+    assert result["valid"] is False
+    assert result["effect_pass"] is False
+    assert "context_length" in result["config_mismatches"]

@@ -61,8 +61,11 @@ arm order: all six permutations
 warmup: excluded per arm
 timer: CUDA events around one FA3 call
 primary anchor: context 16K, K=4
-minimum resolved effect: 2%
+preregistered minimum effect: 2%
+provider-specific noise: P95 pairwise relative difference among identical-arm block medians
+resolved effect floor: max(2%, provider-specific noise)
 required support: at least 12/18 seed/order strata
+full default matrix: 16,200 timed samples and 36 output-equivalence checks
 ```
 
 The 8K and K=1/2 cells are mechanism diagnostics. They cannot rescue a failed
@@ -74,9 +77,14 @@ primary anchor.
 I2A_INCOMPLETE
 I2A_INVALID
 I2A_NO_ROW_ORDER_SIGNAL
+I2A_UNPOWERED
 I2A_ORDER_SENSITIVE
 I2A_ROW_ORDER_SIGNAL
 ```
+
+`I2A_UNPOWERED` means the complete, valid run had a provider-specific same-arm
+noise floor above 2%, and the primary effect did not clear that measured floor.
+It is not evidence that row order has no effect.
 
 Only `I2A_ROW_ORDER_SIGNAL` permits an actual EAGLE target-verify replay. It does
 not permit a scheduler, production implementation, or upstream PR.

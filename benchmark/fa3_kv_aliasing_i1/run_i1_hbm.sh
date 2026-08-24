@@ -10,6 +10,26 @@ if [[ ! -f "${PREFLIGHT_ROOT}/PRECHECK_PASS" ]]; then
   echo "I1 counter/clock preflight did not pass." >&2
   exit 2
 fi
+for receipt in visible-gpu-uuid.txt requested-sm-clock-mhz.txt requested-hbm-metrics.txt; do
+  if [[ ! -s "${PREFLIGHT_ROOT}/${receipt}" ]]; then
+    echo "Missing preflight receipt: ${receipt}" >&2
+    exit 2
+  fi
+done
+current_gpu_uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader)"
+if [[ "$(printf '%s\n' "${current_gpu_uuid}" | wc -l)" -ne 1 ]] || \
+  [[ "${current_gpu_uuid}" != "$(<"${PREFLIGHT_ROOT}/visible-gpu-uuid.txt")" ]]; then
+  echo "Current GPU does not match the preflighted GPU." >&2
+  exit 2
+fi
+if [[ "${I1_SM_CLOCK_MHZ}" != "$(<"${PREFLIGHT_ROOT}/requested-sm-clock-mhz.txt")" ]]; then
+  echo "I1 clock does not match the preflighted clock." >&2
+  exit 2
+fi
+if [[ "${I1_HBM_METRICS}" != "$(<"${PREFLIGHT_ROOT}/requested-hbm-metrics.txt")" ]]; then
+  echo "I1 metrics do not match the preflighted counter set." >&2
+  exit 2
+fi
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   echo "Refusing to run I1 from a dirty worktree." >&2
   exit 2
@@ -31,10 +51,16 @@ I0_REPETITIONS=30 \
 I0_WARMUP=10 \
 benchmark/fa3_kv_aliasing_i0/run_i0.sh
 
+python -m sglang.benchmark.fa3_kv_aliasing_i1 validate-latency-gate \
+  --summary "${RESULT_ROOT}/latency/i0-summary.json" \
+  --output "${RESULT_ROOT}/latency/i1-latency-gate.json"
+
 mkdir -p "${RESULT_ROOT}/metadata" "${RESULT_ROOT}/profiles"
 touch "${RESULT_ROOT}/i1-started"
 git rev-parse HEAD >"${RESULT_ROOT}/metadata/git-head.txt"
 nvidia-smi -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
+python -m pip freeze >"${RESULT_ROOT}/metadata/pip-freeze.txt"
+ncu --version >"${RESULT_ROOT}/metadata/ncu-version.txt" 2>&1
 cp /tmp/i1-clock-lock.txt "${RESULT_ROOT}/metadata/clock-lock.txt"
 nvidia-smi -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" \
   >"${RESULT_ROOT}/metadata/clock-lock.txt" 2>&1

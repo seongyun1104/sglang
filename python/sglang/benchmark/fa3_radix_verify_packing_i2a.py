@@ -31,6 +31,15 @@ DEFAULT_CONTEXT_LENGTHS = (8192, 16384)
 DEFAULT_SPECULATIVE_STEPS = (1, 2, 4)
 
 
+def _nearest_rank_percentile(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    if not 0.0 < percentile <= 1.0:
+        raise ValueError("percentile must be in (0, 1]")
+    ordered = sorted(float(value) for value in values)
+    return ordered[math.ceil(percentile * len(ordered)) - 1]
+
+
 @dataclass(frozen=True)
 class I2AConfig:
     model_id: str = "Qwen/Qwen3.8-27B"
@@ -55,6 +64,14 @@ class I2AConfig:
             raise ValueError("shared_prefix_ratio must be between zero and one")
         if self.page_size != 1:
             raise ValueError("I2a currently requires page_size=1")
+        if self.num_query_heads <= 0 or self.num_kv_heads <= 0 or self.head_dim <= 0:
+            raise ValueError(
+                "attention head counts and head dimension must be positive"
+            )
+        if self.num_query_heads % self.num_kv_heads:
+            raise ValueError("query heads must be divisible by KV heads")
+        if self.dtype != "bfloat16":
+            raise ValueError("I2a is preregistered for BF16 only")
         if self.repetitions <= 0 or self.warmup < 0:
             raise ValueError("invalid repetition or warmup count")
         if self.minimum_effect_percent <= 0:
@@ -100,6 +117,8 @@ def row_permutations(config: I2AConfig, *, seed: int) -> dict[str, torch.Tensor]
     )
     generator = torch.Generator().manual_seed(int(seed) + 7_919)
     random = torch.randperm(config.batch_size, generator=generator)
+    if torch.equal(random, clustered) or torch.equal(random, interleaved):
+        raise ValueError("random row order collided with a controlled arm")
     result = {CLUSTERED: clustered, INTERLEAVED: interleaved, RANDOM: random}
     validate_row_permutations(config, result)
     return result
@@ -200,11 +219,12 @@ def build_plan(
     seeds: Sequence[int],
 ) -> dict[str, Any]:
     config.validate()
-    contexts = tuple(int(value) for value in contexts)
-    steps = tuple(int(value) for value in speculative_steps)
-    seeds = tuple(int(value) for value in seeds)
-    if not contexts or not steps or not seeds or len(set(seeds)) != len(seeds):
-        raise ValueError("contexts, speculative steps, and unique seeds are required")
+    contexts, steps, seeds = validate_axes(
+        contexts=contexts,
+        speculative_steps=speculative_steps,
+        seeds=seeds,
+        require_primary_anchor=False,
+    )
     cells: dict[str, Any] = {}
     for context_length in contexts:
         for depth in steps:
@@ -235,6 +255,15 @@ def build_plan(
         "contexts": list(contexts),
         "speculative_steps": list(steps),
         "seeds": list(seeds),
+        "expected_samples": (
+            len(contexts)
+            * len(steps)
+            * len(seeds)
+            * len(BALANCED_ARM_ORDERS)
+            * len(ROW_ORDERS)
+            * config.repetitions
+        ),
+        "expected_output_checks": len(contexts) * len(steps) * len(seeds) * 2,
         "row_orders": list(ROW_ORDERS),
         "balanced_arm_orders": [list(order) for order in BALANCED_ARM_ORDERS],
         "primary_anchor": {"context_length": 16384, "speculative_steps": 4},
@@ -249,6 +278,36 @@ def build_plan(
             "changed_variable": "request row order only",
         },
     }
+
+
+def validate_axes(
+    *,
+    contexts: Sequence[int],
+    speculative_steps: Sequence[int],
+    seeds: Sequence[int],
+    require_primary_anchor: bool,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    normalized_contexts = tuple(int(value) for value in contexts)
+    normalized_steps = tuple(int(value) for value in speculative_steps)
+    normalized_seeds = tuple(int(value) for value in seeds)
+    if not normalized_contexts or any(value <= 1 for value in normalized_contexts):
+        raise ValueError("positive committed contexts greater than one are required")
+    if not normalized_steps or any(value <= 0 for value in normalized_steps):
+        raise ValueError("positive speculative steps are required")
+    if not normalized_seeds:
+        raise ValueError("at least one seed is required")
+    for name, values in (
+        ("contexts", normalized_contexts),
+        ("speculative steps", normalized_steps),
+        ("seeds", normalized_seeds),
+    ):
+        if len(set(values)) != len(values):
+            raise ValueError(f"{name} must be unique")
+    if require_primary_anchor and (
+        16384 not in normalized_contexts or 4 not in normalized_steps
+    ):
+        raise ValueError("hardware evidence requires the preregistered 16K/K=4 anchor")
+    return normalized_contexts, normalized_steps, normalized_seeds
 
 
 def _dtype(name: str) -> torch.dtype:
@@ -462,10 +521,9 @@ def analyze_rows(
                 / medians[INTERLEAVED]
                 * 100.0
             )
-            support = 0
+            block_medians = {}
             for seed in seeds:
                 for order_index in range(len(BALANCED_ARM_ORDERS)):
-                    by_arm = {}
                     for arm in ROW_ORDERS:
                         values = [
                             float(row["latency_ms"])
@@ -476,13 +534,38 @@ def analyze_rows(
                             and int(row["order_index"]) == order_index
                             and row["row_order"] == arm
                         ]
-                        by_arm[arm] = statistics.median(values)
+                        block_medians[(int(seed), order_index, arm)] = (
+                            statistics.median(values)
+                        )
+            same_arm_differences = []
+            for seed in seeds:
+                for arm in ROW_ORDERS:
+                    repeated = [
+                        block_medians[(int(seed), order_index, arm)]
+                        for order_index in range(len(BALANCED_ARM_ORDERS))
+                    ]
+                    for left, right in itertools.combinations(repeated, 2):
+                        denominator = statistics.median((left, right))
+                        same_arm_differences.append(
+                            abs(left - right) / denominator * 100.0
+                        )
+            same_arm_p95_noise = _nearest_rank_percentile(same_arm_differences, 0.95)
+            resolved_effect_floor = max(
+                config.minimum_effect_percent, same_arm_p95_noise
+            )
+            support = 0
+            for seed in seeds:
+                for order_index in range(len(BALANCED_ARM_ORDERS)):
+                    by_arm = {
+                        arm: block_medians[(int(seed), order_index, arm)]
+                        for arm in ROW_ORDERS
+                    }
                     local_effect = (
                         (by_arm[INTERLEAVED] - by_arm[CLUSTERED])
                         / by_arm[INTERLEAVED]
                         * 100.0
                     )
-                    support += local_effect >= config.minimum_effect_percent
+                    support += local_effect >= resolved_effect_floor
             cell_results.append(
                 {
                     "context_length": int(context_length),
@@ -490,6 +573,11 @@ def analyze_rows(
                     "target_verify_width": verify_width(int(depth)),
                     "median_latency_ms": medians,
                     "clustered_vs_interleaved_percent": effect,
+                    "preregistered_effect_floor_percent": (
+                        config.minimum_effect_percent
+                    ),
+                    "same_arm_p95_noise_percent": same_arm_p95_noise,
+                    "resolved_effect_floor_percent": resolved_effect_floor,
                     "supporting_strata": support,
                     "required_support": math.ceil(
                         len(seeds) * len(BALANCED_ARM_ORDERS) * 2 / 3
@@ -518,7 +606,8 @@ def analyze_rows(
             "cells": cell_results,
         }
     powered = (
-        anchor["clustered_vs_interleaved_percent"] >= config.minimum_effect_percent
+        anchor["clustered_vs_interleaved_percent"]
+        >= anchor["resolved_effect_floor_percent"]
     )
     supported = anchor["supporting_strata"] >= anchor["required_support"]
     status = (
@@ -526,6 +615,11 @@ def analyze_rows(
     )
     if powered and not supported:
         status = "I2A_ORDER_SENSITIVE"
+    elif (
+        not powered
+        and anchor["same_arm_p95_noise_percent"] > config.minimum_effect_percent
+    ):
+        status = "I2A_UNPOWERED"
     return {
         "i2a_status": status,
         "expected": expected,
@@ -545,6 +639,12 @@ def run_i2a(
     output_dir: Path,
 ) -> dict[str, Any]:
     config.validate()
+    contexts, speculative_steps, seeds = validate_axes(
+        contexts=contexts,
+        speculative_steps=speculative_steps,
+        seeds=seeds,
+        require_primary_anchor=True,
+    )
     if not torch.cuda.is_available():
         raise RuntimeError("I2a requires CUDA")
     major, _ = torch.cuda.get_device_capability()

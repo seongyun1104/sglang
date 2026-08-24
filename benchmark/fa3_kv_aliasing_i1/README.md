@@ -8,6 +8,9 @@ RESULT_ROOT=/workspace/i1/preflight \
 benchmark/fa3_kv_aliasing_i1/preflight_i1.sh
 ```
 
+The preflight is standalone and requires only PyTorch, CUDA/NVIDIA tools, and
+Nsight Compute. Read `RENTAL_RUNBOOK.md` before provisioning a paid host.
+
 Only a completed preflight permits the HBM stage:
 
 ```bash

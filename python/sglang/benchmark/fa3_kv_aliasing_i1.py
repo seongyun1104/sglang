@@ -16,6 +16,21 @@ import torch
 ALIASED = "shared_aliased"
 CONTIGUOUS = "duplicated_contiguous"
 PROFILE_LAYOUTS = (ALIASED, CONTIGUOUS)
+I1_LATENCY_PASS_STATUSES = ("I0_ALIASING_CANDIDATE", "I0_MIXED_CANDIDATE")
+I1_ANCHOR_CONFIG = {
+    "model_id": "Qwen/Qwen3.8-27B",
+    "batch_size": 16,
+    "context_length": 16384,
+    "query_length": 1,
+    "shared_prefix_ratio": 0.9,
+    "page_size": 1,
+    "num_query_heads": 24,
+    "num_kv_heads": 4,
+    "head_dim": 256,
+    "dtype": "bfloat16",
+    "causal": True,
+    "num_splits": 0,
+}
 
 
 def _start_profiler() -> None:
@@ -206,6 +221,68 @@ def validate_profile_pair(a_path: Path, b_path: Path, output: Path) -> dict[str,
     return result
 
 
+def validate_latency_gate(summary_path: Path, output: Path) -> dict[str, Any]:
+    summary = json.loads(summary_path.read_text())
+    config = summary.get("config", {})
+    config_mismatches = {
+        key: {"expected": expected, "observed": config.get(key)}
+        for key, expected in I1_ANCHOR_CONFIG.items()
+        if config.get(key) != expected
+    }
+    expected_samples = summary.get("expected_samples")
+    observed_samples = summary.get("observed_samples")
+    complete = (
+        isinstance(expected_samples, int)
+        and expected_samples > 0
+        and observed_samples == expected_samples
+    )
+    status = summary.get("i0_status")
+    minimum_effect = summary.get("minimum_effect_percent")
+    measured_effect = summary.get("warm_alias_speedup_percent")
+    effect_pass = (
+        isinstance(minimum_effect, (int, float))
+        and isinstance(measured_effect, (int, float))
+        and math.isfinite(float(minimum_effect))
+        and math.isfinite(float(measured_effect))
+        and float(measured_effect) >= float(minimum_effect)
+    )
+    required_support = summary.get("required_stratum_support")
+    observed_support = summary.get("alias_supporting_strata")
+    support_pass = (
+        isinstance(required_support, int)
+        and required_support > 0
+        and isinstance(observed_support, int)
+        and observed_support >= required_support
+    )
+    valid = bool(
+        status in I1_LATENCY_PASS_STATUSES
+        and summary.get("outputs_valid") is True
+        and complete
+        and effect_pass
+        and support_pass
+        and not config_mismatches
+    )
+    result = {
+        "valid": valid,
+        "i0_status": status,
+        "accepted_i0_statuses": list(I1_LATENCY_PASS_STATUSES),
+        "outputs_valid": summary.get("outputs_valid"),
+        "complete": complete,
+        "expected_samples": expected_samples,
+        "observed_samples": observed_samples,
+        "effect_pass": effect_pass,
+        "minimum_effect_percent": minimum_effect,
+        "warm_alias_speedup_percent": measured_effect,
+        "support_pass": support_pass,
+        "required_stratum_support": required_support,
+        "alias_supporting_strata": observed_support,
+        "config_mismatches": config_mismatches,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -220,6 +297,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate.add_argument("--a", type=Path, required=True)
     validate.add_argument("--b", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+    latency_gate = subparsers.add_parser("validate-latency-gate")
+    latency_gate.add_argument("--summary", type=Path, required=True)
+    latency_gate.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "counter-preflight":
         print(json.dumps(run_counter_preflight(args.output), indent=2, sort_keys=True))
@@ -238,6 +318,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+    if args.command == "validate-latency-gate":
+        result = validate_latency_gate(args.summary, args.output)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["valid"] else 2
     result = validate_profile_pair(args.a, args.b, args.output)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["valid"] else 2
