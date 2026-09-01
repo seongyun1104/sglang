@@ -11,6 +11,7 @@ The H100 runner refuses a dirty worktree and retains raw timing, output checks,
 runtime metadata, and GPU telemetry:
 
 ```bash
+I2A_GPU_INDEX=0 \
 I2A_SM_CLOCK_MHZ=1410 \
 PREFLIGHT_ROOT=/workspace/i1/preflight \
 I1_GATE_B_REVIEW_RECEIPT=/workspace/i1/hbm/GATE_B_REVIEW_RECEIPT \

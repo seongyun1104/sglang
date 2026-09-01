@@ -24,10 +24,13 @@ nvidia-smi application-clock lock succeeds
 ```
 
 Any failure means immediate teardown. Container root without host counter access is
-not sufficient. Exactly one H100 must be visible. The preflight records its UUID,
-the requested clock, and the exact HBM counter set; paid runners reject a different
-GPU, clock, or counter set. No anchor measurement is allowed after a failed
-preflight.
+not sufficient. One H100 must be selected by `I1_GPU_INDEX` and pinned for every
+CUDA, NCU, clock, and telemetry operation. Additional visible GPUs are allowed only
+on an explicitly whole-host-exclusive rental and must have no pre-existing compute
+processes. The preflight records all visible GPUs plus the selected GPU's index and
+UUID, the requested clock, and the exact HBM counter set; paid runners reject a
+different GPU, clock, or counter set. No anchor measurement is allowed after a
+failed preflight.
 
 ## Sequence
 

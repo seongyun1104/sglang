@@ -30,18 +30,24 @@ if [[ ! -f "${PREFLIGHT_ROOT}/PRECHECK_PASS" ]]; then
   echo "I2a requires the counter/clock permission preflight." >&2
   exit 2
 fi
-for receipt in visible-gpu-uuid.txt requested-sm-clock-mhz.txt; do
+for receipt in selected-gpu-index.txt selected-gpu-uuid.txt requested-sm-clock-mhz.txt; do
   if [[ ! -s "${PREFLIGHT_ROOT}/${receipt}" ]]; then
     echo "Missing preflight receipt: ${receipt}" >&2
     exit 2
   fi
 done
-current_gpu_uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader)"
-if [[ "$(printf '%s\n' "${current_gpu_uuid}" | wc -l)" -ne 1 ]] || \
-  [[ "${current_gpu_uuid}" != "$(<"${PREFLIGHT_ROOT}/visible-gpu-uuid.txt")" ]]; then
+preflight_gpu_index="$(<"${PREFLIGHT_ROOT}/selected-gpu-index.txt")"
+I2A_GPU_INDEX="${I2A_GPU_INDEX:-${preflight_gpu_index}}"
+if [[ "${I2A_GPU_INDEX}" != "${preflight_gpu_index}" ]]; then
+  echo "I2a GPU index does not match the preflighted GPU." >&2
+  exit 2
+fi
+current_gpu_uuid="$(nvidia-smi -i "${I2A_GPU_INDEX}" --query-gpu=uuid --format=csv,noheader)"
+if [[ "${current_gpu_uuid}" != "$(<"${PREFLIGHT_ROOT}/selected-gpu-uuid.txt")" ]]; then
   echo "Current GPU does not match the preflighted GPU." >&2
   exit 2
 fi
+export CUDA_VISIBLE_DEVICES="${I2A_GPU_INDEX}"
 if [[ "${I2A_SM_CLOCK_MHZ}" != "$(<"${PREFLIGHT_ROOT}/requested-sm-clock-mhz.txt")" ]]; then
   echo "I2a clock does not match the preflighted clock." >&2
   exit 2
@@ -55,13 +61,13 @@ mkdir -p "${RESULT_ROOT}/metadata"
 touch "${RESULT_ROOT}/i2a-started"
 git rev-parse HEAD >"${RESULT_ROOT}/metadata/git-head.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ >"${RESULT_ROOT}/metadata/started-at-utc.txt"
-nvidia-smi -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
+nvidia-smi -i "${I2A_GPU_INDEX}" -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
 python -m pip freeze >"${RESULT_ROOT}/metadata/pip-freeze.txt"
 python -c 'import json, torch; print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda, "gpu": torch.cuda.get_device_name()}))' \
   >"${RESULT_ROOT}/metadata/runtime.json"
 
 reset_clock() {
-  nvidia-smi -rgc >"${RESULT_ROOT}/metadata/clock-reset.txt" 2>&1 || true
+  nvidia-smi -i "${I2A_GPU_INDEX}" -rgc >"${RESULT_ROOT}/metadata/clock-reset.txt" 2>&1 || true
 }
 TELEMETRY_PID=""
 stop_telemetry() {
@@ -76,10 +82,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-nvidia-smi -lgc "${I2A_SM_CLOCK_MHZ},${I2A_SM_CLOCK_MHZ}" \
+nvidia-smi -i "${I2A_GPU_INDEX}" -lgc "${I2A_SM_CLOCK_MHZ},${I2A_SM_CLOCK_MHZ}" \
   >"${RESULT_ROOT}/metadata/clock-lock.txt" 2>&1
 
-nvidia-smi \
+nvidia-smi -i "${I2A_GPU_INDEX}" \
   --query-gpu=timestamp,name,pstate,clocks.sm,clocks.mem,temperature.gpu,power.draw,utilization.gpu,memory.used \
   --format=csv \
   --loop-ms=500 \

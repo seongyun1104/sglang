@@ -16,6 +16,16 @@ I0_REPETITIONS="${I0_REPETITIONS:-50}"
 I0_WARMUP="${I0_WARMUP:-10}"
 I0_L2_THRASH_MIB="${I0_L2_THRASH_MIB:-128}"
 I0_MINIMUM_EFFECT_PERCENT="${I0_MINIMUM_EFFECT_PERCENT:-2.0}"
+I0_GPU_INDEX="${I0_GPU_INDEX:-}"
+
+NVIDIA_SMI_DEVICE_ARGS=()
+if [[ -n "${I0_GPU_INDEX}" ]]; then
+  if [[ ! "${I0_GPU_INDEX}" =~ ^[0-9]+$ ]]; then
+    echo "I0_GPU_INDEX must be a non-negative integer." >&2
+    exit 2
+  fi
+  NVIDIA_SMI_DEVICE_ARGS=(-i "${I0_GPU_INDEX}")
+fi
 
 if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   echo "Refusing to run I0 from a dirty worktree; commit the exact experiment first." >&2
@@ -32,11 +42,11 @@ touch "${RESULT_ROOT}/i0-started"
 
 git rev-parse HEAD >"${RESULT_ROOT}/metadata/git-head.txt"
 date -u +%Y-%m-%dT%H:%M:%SZ >"${RESULT_ROOT}/metadata/started-at-utc.txt"
-nvidia-smi -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
+nvidia-smi "${NVIDIA_SMI_DEVICE_ARGS[@]}" -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
 python -c 'import json, torch; print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda, "gpu": torch.cuda.get_device_name()}))' \
   >"${RESULT_ROOT}/metadata/runtime.json"
 
-nvidia-smi \
+nvidia-smi "${NVIDIA_SMI_DEVICE_ARGS[@]}" \
   --query-gpu=timestamp,name,pstate,clocks.sm,clocks.mem,temperature.gpu,power.draw,utilization.gpu,memory.used \
   --format=csv \
   --loop-ms=500 \

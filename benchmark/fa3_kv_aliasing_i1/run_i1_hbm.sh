@@ -10,18 +10,24 @@ if [[ ! -f "${PREFLIGHT_ROOT}/PRECHECK_PASS" ]]; then
   echo "I1 counter/clock preflight did not pass." >&2
   exit 2
 fi
-for receipt in visible-gpu-uuid.txt requested-sm-clock-mhz.txt requested-hbm-metrics.txt; do
+for receipt in selected-gpu-index.txt selected-gpu-uuid.txt requested-sm-clock-mhz.txt requested-hbm-metrics.txt; do
   if [[ ! -s "${PREFLIGHT_ROOT}/${receipt}" ]]; then
     echo "Missing preflight receipt: ${receipt}" >&2
     exit 2
   fi
 done
-current_gpu_uuid="$(nvidia-smi --query-gpu=uuid --format=csv,noheader)"
-if [[ "$(printf '%s\n' "${current_gpu_uuid}" | wc -l)" -ne 1 ]] || \
-  [[ "${current_gpu_uuid}" != "$(<"${PREFLIGHT_ROOT}/visible-gpu-uuid.txt")" ]]; then
+preflight_gpu_index="$(<"${PREFLIGHT_ROOT}/selected-gpu-index.txt")"
+I1_GPU_INDEX="${I1_GPU_INDEX:-${preflight_gpu_index}}"
+if [[ "${I1_GPU_INDEX}" != "${preflight_gpu_index}" ]]; then
+  echo "I1 GPU index does not match the preflighted GPU." >&2
+  exit 2
+fi
+current_gpu_uuid="$(nvidia-smi -i "${I1_GPU_INDEX}" --query-gpu=uuid --format=csv,noheader)"
+if [[ "${current_gpu_uuid}" != "$(<"${PREFLIGHT_ROOT}/selected-gpu-uuid.txt")" ]]; then
   echo "Current GPU does not match the preflighted GPU." >&2
   exit 2
 fi
+export CUDA_VISIBLE_DEVICES="${I1_GPU_INDEX}"
 if [[ "${I1_SM_CLOCK_MHZ}" != "$(<"${PREFLIGHT_ROOT}/requested-sm-clock-mhz.txt")" ]]; then
   echo "I1 clock does not match the preflighted clock." >&2
   exit 2
@@ -40,13 +46,14 @@ if [[ -e "${RESULT_ROOT}/i1-started" ]]; then
 fi
 reset_clock() {
   mkdir -p "${RESULT_ROOT}/metadata"
-  nvidia-smi -rgc >"${RESULT_ROOT}/metadata/clock-reset.txt" 2>&1 || true
+  nvidia-smi -i "${I1_GPU_INDEX}" -rgc >"${RESULT_ROOT}/metadata/clock-reset.txt" 2>&1 || true
 }
 trap reset_clock EXIT
-nvidia-smi -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" >/tmp/i1-clock-lock.txt 2>&1
+nvidia-smi -i "${I1_GPU_INDEX}" -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" >/tmp/i1-clock-lock.txt 2>&1
 
 # Run the clean-worktree latency gate before creating any I1-owned artifact.
 RESULT_ROOT="${RESULT_ROOT}/latency" \
+I0_GPU_INDEX="${I1_GPU_INDEX}" \
 I0_REPETITIONS=30 \
 I0_WARMUP=10 \
 benchmark/fa3_kv_aliasing_i0/run_i0.sh
@@ -58,11 +65,11 @@ python -m sglang.benchmark.fa3_kv_aliasing_i1 validate-latency-gate \
 mkdir -p "${RESULT_ROOT}/metadata" "${RESULT_ROOT}/profiles"
 touch "${RESULT_ROOT}/i1-started"
 git rev-parse HEAD >"${RESULT_ROOT}/metadata/git-head.txt"
-nvidia-smi -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
+nvidia-smi -i "${I1_GPU_INDEX}" -q >"${RESULT_ROOT}/metadata/nvidia-smi-q.txt"
 python -m pip freeze >"${RESULT_ROOT}/metadata/pip-freeze.txt"
 ncu --version >"${RESULT_ROOT}/metadata/ncu-version.txt" 2>&1
 cp /tmp/i1-clock-lock.txt "${RESULT_ROOT}/metadata/clock-lock.txt"
-nvidia-smi -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" \
+nvidia-smi -i "${I1_GPU_INDEX}" -lgc "${I1_SM_CLOCK_MHZ},${I1_SM_CLOCK_MHZ}" \
   >"${RESULT_ROOT}/metadata/clock-lock.txt" 2>&1
 
 profiles=(shared_aliased duplicated_contiguous duplicated_contiguous shared_aliased)

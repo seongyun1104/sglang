@@ -1,6 +1,9 @@
 import importlib.util
 import json
+import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -13,6 +16,9 @@ assert _SPEC is not None and _SPEC.loader is not None
 _MODULE = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MODULE
 _SPEC.loader.exec_module(_MODULE)
+_PREFLIGHT = (
+    Path(__file__).resolve().parents[4] / "benchmark/fa3_kv_aliasing_i1/preflight_i1.sh"
+)
 
 
 def _profile(layout: str, digest: str = "same"):
@@ -97,3 +103,89 @@ def test_latency_gate_fails_closed_on_null_or_shape_mismatch(tmp_path):
     assert result["valid"] is False
     assert result["effect_pass"] is False
     assert "context_length" in result["config_mismatches"]
+
+
+def _write_executable(path: Path, source: str) -> None:
+    path.write_text(textwrap.dedent(source))
+    path.chmod(0o755)
+
+
+def _run_mocked_preflight(tmp_path: Path, *, compute_apps: str = ""):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(
+        bin_dir / "nvidia-smi",
+        f"""\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        args="$*"
+        if [[ "$args" == *"--query-gpu=index,uuid,name"* ]]; then
+          printf '%s\\n' '0, GPU-A, NVIDIA H100' '1, GPU-B, NVIDIA H100'
+        elif [[ "$args" == *"-i 1 --query-gpu=uuid,name"* ]]; then
+          printf '%s\\n' 'GPU-B, NVIDIA H100'
+        elif [[ "$args" == *"--query-compute-apps"* ]]; then
+          printf '%s' {compute_apps!r}
+        fi
+        """,
+    )
+    _write_executable(
+        bin_dir / "ncu",
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [[ "$*" == *"--query-metrics"* ]]; then
+          echo mock_metric
+          exit 0
+        fi
+        export_path=""
+        while (( $# )); do
+          if [[ "$1" == "--export" ]]; then
+            export_path="$2"
+            break
+          fi
+          shift
+        done
+        [[ -n "$export_path" ]]
+        printf '%s\\n' mock-report >"${export_path}.ncu-rep"
+        """,
+    )
+    result_root = tmp_path / "result"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "I1_GPU_INDEX": "1",
+            "I1_SM_CLOCK_MHZ": "1410",
+            "RESULT_ROOT": str(result_root),
+        }
+    )
+    completed = subprocess.run(
+        ["bash", str(_PREFLIGHT)],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+    return completed, result_root
+
+
+def test_preflight_pins_one_gpu_on_idle_exclusive_multi_gpu_host(tmp_path):
+    completed, result_root = _run_mocked_preflight(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (result_root / "PRECHECK_PASS").exists()
+    assert (result_root / "selected-gpu-index.txt").read_text().strip() == "1"
+    assert (result_root / "selected-gpu-uuid.txt").read_text().strip() == "GPU-B"
+    assert len((result_root / "all-visible-gpus.txt").read_text().splitlines()) == 2
+
+
+def test_preflight_rejects_non_idle_multi_gpu_host(tmp_path):
+    completed, result_root = _run_mocked_preflight(
+        tmp_path,
+        compute_apps="GPU-A, 42, python, 100 MiB\\n",
+    )
+
+    assert completed.returncode == 12
+    assert (result_root / "PRECHECK_HOST_NOT_IDLE").exists()
+    assert (result_root / "PRECHECK_FAILED").exists()
+    assert not (result_root / "PRECHECK_PASS").exists()
