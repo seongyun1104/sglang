@@ -28,6 +28,7 @@ from sglang.kernels.ops.attention.utils import (
     mla_quantize_without_rope_for_fp8,
 )
 from sglang.srt.environ import envs
+from sglang.srt.layers.attention.rubin_mtp_mla_adapter import RubinMtpMLAAdapter
 from sglang.srt.layers.attention.trtllm_mla_backend import (
     TRTLLMMLABackend,
     TRTLLMMLAMultiStepDraftBackend,
@@ -66,6 +67,37 @@ class CuteDslMLABackend(TRTLLMMLABackend):
             q_indptr_decode_buf,
             backend="cute-dsl",
         )
+        self._rubin_mtp_adapter = RubinMtpMLAAdapter(
+            self.workspace_buffer,
+            page_size=self.page_size,
+            kv_lora_rank=self.kv_lora_rank,
+            qk_rope_head_dim=self.qk_rope_head_dim,
+        )
+        self._rubin_mtp_target_verify = False
+
+    def init_forward_metadata(self, forward_batch: ForwardBatch):
+        self._rubin_mtp_adapter.begin_forward()
+        return super().init_forward_metadata(forward_batch)
+
+    def init_forward_metadata_out_graph(
+        self,
+        forward_batch: ForwardBatch,
+        in_capture: bool = False,
+    ):
+        self._rubin_mtp_adapter.begin_forward()
+        return super().init_forward_metadata_out_graph(
+            forward_batch,
+            in_capture=in_capture,
+        )
+
+    def _uses_cuda_graph_block_table(self, block_tables: torch.Tensor) -> bool:
+        graph_tables = self.decode_cuda_graph_kv_indices
+        if graph_tables is None:
+            return False
+        return (
+            block_tables.untyped_storage().data_ptr()
+            == graph_tables.untyped_storage().data_ptr()
+        )
 
     # ------------------------------------------------------------------
     # Kernel + decode forward.
@@ -92,6 +124,18 @@ class CuteDslMLABackend(TRTLLMMLABackend):
         rank-local ``(out, lse)``, the LSE in natural log.
         """
         if cp_world <= 1:
+            if self._rubin_mtp_target_verify and self._rubin_mtp_adapter.available:
+                rubin_out = self._rubin_mtp_adapter.run_if_eligible(
+                    query,
+                    kv_cache,
+                    block_tables,
+                    seq_lens,
+                    bmm1_scale=self._compute_decode_bmm1_scale(layer),
+                    is_target_verify=True,
+                    is_cuda_graph=self._uses_cuda_graph_block_table(block_tables),
+                )
+                if rubin_out is not None:
+                    return rubin_out
             return super()._run_decode_kernel(
                 query,
                 kv_cache,
@@ -136,6 +180,39 @@ class CuteDslMLABackend(TRTLLMMLABackend):
             return_lse=True,  # DCP requires the rank-local LSE for the merge
         )
         return raw_out, lse
+
+    def forward_extend(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        layer: RadixAttention,
+        forward_batch: ForwardBatch,
+        save_kv_cache: bool = True,
+        q_rope: Optional[torch.Tensor] = None,
+        k_rope: Optional[torch.Tensor] = None,
+        cos_sin_cache: Optional[torch.Tensor] = None,
+        is_neox: Optional[bool] = False,
+        llama_4_scaling: Optional[torch.Tensor] = None,
+    ):
+        previous = self._rubin_mtp_target_verify
+        self._rubin_mtp_target_verify = forward_batch.forward_mode.is_target_verify()
+        try:
+            return super().forward_extend(
+                q,
+                k,
+                v,
+                layer,
+                forward_batch,
+                save_kv_cache,
+                q_rope,
+                k_rope,
+                cos_sin_cache,
+                is_neox,
+                llama_4_scaling,
+            )
+        finally:
+            self._rubin_mtp_target_verify = previous
 
     def forward_decode(
         self,
